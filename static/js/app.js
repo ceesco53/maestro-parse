@@ -1,5 +1,65 @@
 document.addEventListener('DOMContentLoaded', init);
 
+let SELECTED = { anchorVid: null, chain: new Set() };
+
+function clearHighlight() {
+  SELECTED.anchorVid = null;
+  SELECTED.chain = new Set();
+  renderAll();
+}
+
+function computeChainFromVid(vid){
+  // Build from RAW_ROWS within same foundation scope(s). Collect versions up and down by issuer graph.
+  const byVid = new Map();
+  RAW_ROWS.forEach(r => byVid.set(r.version_id, r));
+  const chain = new Set();
+  const q = [];
+  const start = byVid.get(vid);
+  if (!start) return chain;
+  q.push(start);
+  chain.add(start.version_id);
+  // Walk up issuers
+  let cur = start;
+  let hops = 0;
+  while (cur && cur.issuer_version && hops < 4000){
+    const p = byVid.get(cur.issuer_version);
+    if (!p || chain.has(p.version_id)) break;
+    chain.add(p.version_id);
+    cur = p; hops++;
+  }
+  // Walk down to leaves (BFS)
+  const children = new Map();
+  RAW_ROWS.forEach(r => {
+    if (r.issuer_version){
+      if (!children.has(r.issuer_version)) children.set(r.issuer_version, []);
+      children.get(r.issuer_version).push(r);
+    }
+  });
+  const dq = [start];
+  let steps = 0;
+  while (dq.length && steps < 8000){
+    const n = dq.shift();
+    const kids = children.get(n.version_id) || [];
+    for (const k of kids){
+      if (!chain.has(k.version_id)){
+        chain.add(k.version_id);
+        dq.push(k);
+      }
+    }
+    steps++;
+  }
+  return chain;
+}
+
+function selectByVid(vid){
+  SELECTED.anchorVid = vid || null;
+  SELECTED.chain = vid ? computeChainFromVid(vid) : new Set();
+  renderAll();
+  // visual affordance: flash header button
+  const btn = document.getElementById('btnClearHL'); if(btn){ btn.classList.add('highlight'); setTimeout(()=>btn.classList.remove('highlight'), 450); }
+}
+
+
 const COLORS = {"<=30":"#e11d48","<=60":"#f97316","<=90":"#ca8a04",">90":"#16a34a","no-date":"#6b7280"};
 let RAW_ROWS = [];
 let CARD_DATA_MAIN = {};
@@ -9,7 +69,6 @@ function init(){
   wireDnD();
   wireTabs();
   wireButtons();
-  // dynamic 1–4 columns for grids marked with [data-dynamic-cols]
   applyDynamicCols();
   window.addEventListener('resize', applyDynamicCols);
 }
@@ -18,11 +77,15 @@ function applyDynamicCols(){
   document.querySelectorAll('[data-dynamic-cols]').forEach(setGridCols);
   function setGridCols(el){
     const width = el.clientWidth || el.parentElement?.clientWidth || window.innerWidth;
-    // aim ~420px per card; clamp to 1..4 cols
     let cols = Math.max(1, Math.min(4, Math.floor(width / 420)));
-    // If width very large but few cards exist, CSS will still respect the repeat count
     el.style.setProperty('--cols', cols);
   }
+}
+
+// v4: helper to return CSS classes for selection
+function selClass(r){
+  if (!SELECTED.anchorVid) return '';
+  return SELECTED.chain.has(r.version_id) ? 'highlight' : 'dimmed';
 }
 
 function showError(msg){ const b=document.getElementById('errorBanner'); if(!b) return; b.textContent=msg; b.style.display='block'; }
@@ -68,6 +131,10 @@ function wireTabs(){
 }
 
 function wireButtons(){
+  const $=id=>document.getElementById(id);
+  const clr=$('btnClearHL'); if(clr) clr.addEventListener('click', clearHighlight);
+  document.addEventListener('keydown', (e)=>{ if(e.key==='Escape') clearHighlight(); });
+
   const $=id=>document.getElementById(id);
   $('btnClear').addEventListener('click', ()=>{ RAW_ROWS=[]; renderAll(); setStatus('Cleared'); });
   $('btnCSV').addEventListener('click', ()=> window.open('/api/export/csv','_blank'));
@@ -118,7 +185,7 @@ function renderAll(){
   renderChainsMain(data);
   renderInsights(data);
   renderDeployments();
-  applyDynamicCols(); // recalc after DOM changes
+  applyDynamicCols();
 }
 
 /* Timeline — List cards */
@@ -130,7 +197,7 @@ function renderTimeline(rows){
   list.innerHTML = rows.map(r=>{
     const bucket=toBucket(r.days_remaining), color=COLORS[bucket];
     const tags=[r.certificate_authority?'CA':null, r.transitional?'T':null, r.active?'ACTIVE':null].filter(Boolean).join(' • ');
-    return `<div class="chip" style="border-color:${color}">
+    return `<div class="chip ${selClass(r)}" data-vid="${r.version_id}" style="border-color:${color}" onclick="selectByVid('${r.version_id}')">
       <div class="line1"><strong>${r.foundation} / ${r.cert_name}</strong><span class="sla" style="background:${color}"></span></div>
       <div class="line2"><code>${r.version_id_short}</code> ${tags?('• '+tags):''}</div>
       <div class="line2"><span>${r.days_remaining??'NA'}d</span><span>${r.valid_until||r.valid_until_raw||''}</span></div>
@@ -143,8 +210,8 @@ function renderTable(rows){
   const tbody=document.querySelector('#tbl tbody'); if(!tbody) return; tbody.innerHTML='';
   rows.forEach(r=>{
     const b=toBucket(r.days_remaining);
-    const tr=document.createElement('tr'); tr.innerHTML=`
-      <td>${r.foundation}</td><td>${r.cert_name}</td><td><code>${r.version_id_short}</code></td>
+    const tr=document.createElement('tr'); tr.className = selClass(r); tr.innerHTML=`
+      <td>${r.foundation}</td><td>${r.cert_name}</td><td><code style="cursor:pointer;" onclick="selectByVid('${r.version_id}')" title="Highlight chain">${r.version_id_short}</code></td>
       <td>${r.issuer||''}</td>
       <td>${r.active?'<span class="badge">ACTIVE</span>':''}</td>
       <td>${r.certificate_authority?'<span class="badge">CA</span>':''}</td>
@@ -175,22 +242,55 @@ function renderChainsInto(rows, containerId, mapStore){
     const [foundation,...rest]=key.split('::'); const cert=byF?'(all certificates)':rest.join('::');
     const gr=groups[key].slice(); const byVid={}; gr.forEach(x=>byVid[x.version_id]=x);
 
-    function depth(n,guard=0){
-      if(!n) return 0;
-      if(!n.issuer_version) return n.certificate_authority?1:99;
-      if(guard>64) return 99;
-      const p=byVid[n.issuer_version];
-      if(!p) return n.certificate_authority?2:99;
-      const root=(p.certificate_authority && !p.issuer_version);
-      const base=root?1:depth(p,guard+1);
-      return base+1;
+    const MAX_HOPS = 2000;
+    function computeDepthIter(node){
+      let depth = (node.certificate_authority && !node.issuer_version) ? 1 : 0;
+      let cur = node;
+      let hops = 0;
+      const visited = new Set();
+      while (cur && cur.issuer_version){
+        if (visited.has(cur.version_id)) return 98; // cycle
+        visited.add(cur.version_id);
+        const parent = byVid[cur.issuer_version];
+        if (!parent) return node.certificate_authority ? 2 : 97; // dangling
+        const parentIsRoot = parent.certificate_authority && !parent.issuer_version;
+        depth += 1;
+        if (parentIsRoot) return Math.max(depth, 2);
+        cur = parent;
+        hops += 1;
+        if (hops > MAX_HOPS) return 96; // extremely long
+      }
+      if (node.certificate_authority) return Math.max(depth, 1);
+      return 99; // leaves
     }
-    function trace(n){
-      const out=[]; let cur=n,guard=0;
-      while(cur && guard<64){ out.push(`${cur.cert_name}(${cur.version_id_short})`); if(!cur.issuer_version) break; cur=byVid[cur.issuer_version]; guard++; }
-      return out.reverse().join(' -> ');
+    function computeTraceIter(node){
+      const stack = [];
+      const visited = new Set();
+      let cur = node;
+      let hops = 0;
+      let cycle = false;
+      while (cur){
+        if (visited.has(cur.version_id)) { cycle = true; break; }
+        visited.add(cur.version_id);
+        stack.push(`${cur.cert_name}(${cur.version_id_short})`);
+        if (!cur.issuer_version) break;
+        const parent = byVid[cur.issuer_version];
+        if (!parent) { stack.push(`?(${(cur.issuer_version || '').slice(0,8)}...)`); break; }
+        cur = parent;
+        hops += 1;
+        if (hops > MAX_HOPS) { stack.push('...<truncated>'); break; }
+      }
+      return { chain: stack.reverse().join(' -> '), cycle };
     }
-    gr.forEach(n=>{ n.__depth=depth(n); n.__parent=n.issuer_version?byVid[n.issuer_version]:null; n.__trace=trace(n); });
+
+    gr.forEach(n=>{
+      n.__parent = n.issuer_version ? byVid[n.issuer_version] : null;
+      const d = computeDepthIter(n);
+      const t = computeTraceIter(n);
+      n.__depth = d;
+      n.__trace = t.chain;
+      n.__cycle = t.cycle || (d === 98);
+    });
 
     const roots=gr.filter(n=>n.certificate_authority && !n.issuer_version);
     const transCAs=gr.filter(n=>n.certificate_authority && n.transitional && n.issuer_version);
@@ -223,13 +323,22 @@ function renderChainsInto(rows, containerId, mapStore){
 
 function chipHTML(n){
   const bucket=toBucket(n.days_remaining), color=COLORS[bucket];
-  const badges=[n.certificate_authority?'CA':'', n.transitional?'T':'', n.active?'ACTIVE':''].filter(Boolean).map(b=>`<span class="badge">${b}</span>`).join('');
+  const badges=[
+    n.certificate_authority?'CA':'',
+    n.transitional?'T':'',
+    n.active?'ACTIVE':'',
+    n.__cycle?'CYCLE':''
+  ].filter(Boolean).map(b=>`<span class="badge">${b}</span>`).join('');
   const viol=n.__parent && (n.days_remaining??1e9) < (n.__parent.days_remaining??1e9);
-  const t=`${n.cert_name} / ${n.version_id}
-valid_until: ${n.valid_until || n.valid_until_raw || ''}
-days_remaining: ${n.days_remaining ?? 'NA'}
-issuer_chain: ${n.__trace}`;
-  return `<div class="chip${viol?' violation':''}" title="${t.replace(/"/g,'&quot;')}">
+  const tLines = [
+    `${n.cert_name} / ${n.version_id}`,
+    `valid_until: ${n.valid_until || n.valid_until_raw || ''}`,
+    `days_remaining: ${n.days_remaining ?? 'NA'}`,
+    `issuer_chain: ${n.__trace}`
+  ];
+  if (n.__cycle) tLines.push('NOTE: cycle detected in issuer chain');
+  const t = tLines.join('\n');
+  return `<div class="chip ${selClass(n)}${viol?' violation':''}" data-vid="${n.version_id}" title="${t.replace(/"/g,'&quot;')}" onclick="selectByVid('${n.version_id}')">
     <div class="line1"><strong>${n.version_id_short}</strong><span class="sla" style="background:${color}"></span></div>
     <div class="line2"><span>${n.days_remaining??'NA'}d</span><span>${n.valid_until || n.valid_until_raw || ''}</span></div>
     <div class="line2"><span>${n.issuer_version_short?('issuer '+n.issuer_version_short):''} ${n.__depth?('d'+n.__depth):''}</span><div class="badges">${badges}</div></div>
@@ -263,11 +372,18 @@ window.resortDepCard=(i,m)=>resortDepCard(i,m,CARD_DATA_DEP,'deployChains');
 function renderInsights(rows){
   const root=document.getElementById('insights'); if(!root) return; root.innerHTML='';
   const group=document.getElementById('groupHeatByFoundation')?.checked===true;
-  const events=rows.map(r=>({d:(r.valid_until||r.valid_until_raw||'').slice(0,10), f:r.foundation, c:r.cert_name, v:r.version_id_short})).filter(e=>e.d);
+  const events=rows.map(r=>({d:(r.valid_until||r.valid_until_raw||'').slice(0,10), f:r.foundation, c:r.cert_name, v:r.version_id_short, vFull:r.version_id})).filter(e=>e.d);
   if(!events.length){ const c=document.createElement('div'); c.className='card'; c.innerHTML='<div class="muted">No valid expiration dates in scope.</div>'; root.appendChild(c); return; }
   const byF={}; events.forEach(e=> (byF[e.f]=byF[e.f]||[]).push(e));
   const sets = group ? Object.entries(byF) : [['All Foundations', events]];
   sets.forEach(([title,evs])=>{
+    // v4: dim month cards if they don’t include any selected versions (when selection active)
+    let hasSelected = true;
+    if (SELECTED.anchorVid){
+      const vids = new Set(evs.map(e=>e.vFull || e.v || ''));
+      hasSelected = [...SELECTED.chain].some(v=>vids.has(v));
+    }
+
     const m=new Map(); evs.forEach(e=>{const wk=startOfWeek(e.d); m.set(wk,(m.get(wk)||0)+1);});
     const min=[...m.keys()].sort()[0]; const months=buildMonthList(min);
     const wrap=document.createElement('div'); wrap.className='card'; wrap.innerHTML=`<h4 style="margin:0 0 6px 0;">Rotation Splash — ${title}</h4><div class="grid"></div>`;
@@ -280,7 +396,7 @@ function renderInsights(rows){
       for(let r=0;r<7;r++) svg+=`<text x="6" y="${padT + r*(cell+gap) + cell - 2}" font-size="9" fill="#94a3b8">${dnames[r]}</text>`;
       weeks.forEach((wk,c)=>{ for(let r=0;r<7;r++){ const k=fmt(addDays(parseDate(wk),r)); const val=m.get(startOfWeek(k))||0; const t=val/max; const a=0.25+0.75*t; const x=padL+c*(cell+gap), y=padT+r*(cell+gap); svg+=`<rect x="${x}" y="${y}" width="${cell}" height="${cell}" fill="rgba(22,163,74,${a})"><title>${k}\n${val} expiration(s)</title></rect>`; } });
       svg+='</svg>';
-      const mini=document.createElement('div'); mini.className='chip'; mini.innerHTML=`<strong>${mon}</strong>${svg}`; grid.appendChild(mini);
+      const mini=document.createElement('div'); mini.className='chip'; mini.innerHTML=`<strong>${mon}</strong>${svg}`; if(!hasSelected){ mini.classList.add('dimmed'); } grid.appendChild(mini);
     });
     root.appendChild(wrap);
   });

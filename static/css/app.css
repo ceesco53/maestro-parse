@@ -40,3 +40,9 @@ thead th{position:sticky;top:0;background:#0b1325}
 .empty{padding:10px;border:1px dashed var(--border);border-radius:8px}
 .error-banner{position:sticky;top:0;background:#7f1d1d;color:#fee2e2;padding:8px 12px;border:1px solid #fecaca;border-radius:8px;margin:10px 20px}
 .list{display:grid;gap:8px;grid-template-columns:repeat(auto-fit,minmax(340px,1fr))}
+
+/* v4: cross-tab chain highlight */
+.dimmed { opacity: 0.35; filter: grayscale(0.4); }
+.highlight { outline: 2px solid #60a5fa; box-shadow: 0 0 0 2px rgba(96,165,250,.2); }
+.badge.focus { background:#60a5fa; color:#0b1220; }
+.header-actions { display:flex; gap:6px; align-items:center; }

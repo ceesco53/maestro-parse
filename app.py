@@ -133,7 +133,10 @@ def export_json():
 
 @app.route("/api/runbook")
 def runbook():
-    def md(s): return (s or "").replace("|", "\\|")
+    def md(s: Optional[str]) -> str:
+        s = (s or "")
+        # Escape backslashes first, then pipes for Markdown safety
+        return s.replace("\\", "\\\\").replace("|", "\\|")
     out = io.StringIO()
     out.write("# Certificate Rotation Runbook\n\n")
     cas = [r for r in ROWS if r["certificate_authority"]]
