@@ -1,5 +1,64 @@
 document.addEventListener('DOMContentLoaded', init);
 
+const __DBG = {
+  logs: [],
+  push(kind, msg, meta){
+    const time = new Date().toISOString();
+    const entry = {time, kind, msg: String(msg||''), meta: meta||{}};
+    this.logs.push(entry);
+    if (this.logs.length > 2000) this.logs.shift();
+    const el = document.getElementById('debugLog');
+    if (el && document.body.classList.contains('debug-open')){
+      el.textContent = this.logs.map(l=>`[${l.time}] ${l.kind}: ${l.msg}${l.meta && l.meta.where?` (at ${l.meta.where})`:''}`).join('\n');
+    }
+  }
+};
+
+(function wireGlobalErrorCapture(){
+  const banner = document.getElementById('errorBanner');
+  function show(msg){
+    if (!banner) return;
+    banner.innerHTML = msg.replace(/\n/g,'<br>');
+    banner.style.display = 'block';
+  }
+  window.addEventListener('error', (e)=>{
+    const where = (e.filename? (e.filename+':'+e.lineno+':'+e.colno): 'window.error');
+    __DBG.push('error', e.message||'Unknown error', {where});
+    show(`<strong>JS Error:</strong> ${e.message||'Unknown'}\n<small>${where}</small>`);
+  });
+  window.addEventListener('unhandledrejection', (e)=>{
+    const reason = e.reason && (e.reason.stack || e.reason.message || String(e.reason));
+    __DBG.push('unhandledrejection', reason || 'Unknown rejection');
+    show(`<strong>Unhandled Promise Rejection</strong>\n<small>${reason||''}</small>`);
+  });
+  const oldOnError = window.onerror;
+  window.onerror = function(message, source, lineno, colno, error){
+    const where = (source? (source+':'+lineno+':'+colno): 'window.onerror');
+    __DBG.push('onerror', message || (error && error.message) || 'Unknown', {where});
+    show(`<strong>onerror:</strong> ${message||''}\n<small>${where}</small>`);
+    if (oldOnError) return oldOnError.apply(this, arguments);
+    return false;
+  };
+  // Console tap
+  ['log','warn','error'].forEach(fn=>{
+    const orig = console[fn].bind(console);
+    console[fn] = (...args)=>{ try{ __DBG.push('console.'+fn, args.map(a=> (a && a.stack) ? a.stack : String(a)).join(' ')); }catch{}; return orig(...args); };
+  });
+})();
+
+// Debug button
+(function(){
+  document.addEventListener('click', (e)=>{
+    const t = e.target;
+    if (t && t.id === 'btnDebug'){
+      document.body.classList.toggle('debug-open');
+      const el = document.getElementById('debugLog');
+      if (el){ el.textContent = __DBG.logs.map(l=>`[${l.time}] ${l.kind}: ${l.msg}${l.meta && l.meta.where?` (at ${l.meta.where})`:''}`).join('\n'); }
+    }
+  });
+})();
+
+
 let SELECTED = { anchorVid: null, chain: new Set() };
 
 function clearHighlight() {
@@ -65,12 +124,14 @@ let RAW_ROWS = [];
 let CARD_DATA_MAIN = {};
 let CARD_DATA_DEP = {};
 
+let __wired = false;
 function init(){
-  wireDnD();
-  wireTabs();
-  wireButtons();
+  if (__wired) return; __wired = true;
+  try{ wireDnD(); } catch(e){ __DBG.push('init.wireDnD', e.stack||e.message||String(e)); }
+  try{ wireTabs(); } catch(e){ __DBG.push('init.wireTabs', e.stack||e.message||String(e)); }
+  try{ wireButtons(); } catch(e){ __DBG.push('init.wireButtons', e.stack||e.message||String(e)); }
   applyDynamicCols();
-  window.addEventListener('resize', applyDynamicCols);
+  window.addEventListener('resize', applyDynamicCols, {passive:true});
 }
 
 let __colsReq = null;
@@ -151,6 +212,9 @@ function wireButtons(){
 
   const btnRunbook = document.getElementById('btnRunbook');
   if (btnRunbook) btnRunbook.addEventListener('click', ()=> window.open('/api/runbook','_blank'));
+
+  const btnDebug = document.getElementById('btnDebug');
+  if (btnDebug) btnDebug.addEventListener('click', ()=>{ document.body.classList.toggle('debug-open'); const el=document.getElementById('debugLog'); if(el){ el.textContent = (__DBG.logs||[]).map(l=>`[${l.time}] ${l.kind}: ${l.msg}${l.meta && l.meta.where?` (at ${l.meta.where})`:''}`).join('\n'); } });
 }
 
 function refreshRows(){ fetch('/api/rows').then(r=>r.json()).then(rows=>{ RAW_ROWS=rows; populateFoundationSelect(); populateDeploymentDatalist(); renderAll(); }).catch(e=>showError(e.message)); }
@@ -189,19 +253,25 @@ function filteredRows(){
   return data;
 }
 
-let __rendering = false;
+let __rendering = false, __renderReq = null;
 function renderAll(){
-  if (__rendering) return; __rendering = true;
-  try{
-    const data=filteredRows();
-    renderTimeline(data);
-    renderTable(data);
-    renderChainsMain(data);
-    renderInsights(data);
-    renderDeployments();
-    applyDynamicCols();
-  } finally { __rendering = false; }
+  if (__renderReq) return; // debounce bursts
+  __renderReq = Promise.resolve().then(()=>{
+    if (__rendering) { __renderReq=null; return; }
+    __rendering = true;
+    try{
+      const data=filteredRows();
+      safeRender('Timeline', ()=>renderTimeline(data));
+      safeRender('Table', ()=>renderTable(data));
+      safeRender('Chains', ()=>renderChainsMain(data));
+      safeRender('Insights', ()=>renderInsights(data));
+      safeRender('Deployments', ()=>renderDeployments());
+      applyDynamicCols();
+    } catch(e){ __DBG.push('renderAll.catch', e && (e.stack||e.message)||String(e)); }
+    finally { __rendering=false; __renderReq=null; }
+  });
 }
+function safeRender(tag, fn){ try{ fn(); } catch(e){ __DBG.push('render.'+tag, e && (e.stack||e.message)||String(e)); const b=document.getElementById('errorBanner'); if(b){ b.style.display='block'; b.innerHTML = `<strong>${tag} render error:</strong> ${(e&&e.message)||e}`; } } }
 
 /* Timeline — List cards */
 function renderTimeline(rows){
@@ -242,6 +312,10 @@ function renderTable(rows){
 /* Chains (shared renderer used by main + deployments) */
 function renderChainsMain(rows){ CARD_DATA_MAIN={}; renderChainsInto(rows,'chains',CARD_DATA_MAIN); }
 function renderChainsInto(rows, containerId, mapStore){
+  // Hard caps for safety in massive topologies
+  const MAX_CARDS = 300;
+  const MAX_CHIPS_PER_TIER = 5000;
+  if (rows.length > 150000){ __DBG.push('warn','Huge dataset; truncating rows to protect UI'); rows = rows.slice(0,150000); }
   const el=document.getElementById(containerId); if(!el) return; el.innerHTML='';
   const byF=(containerId==='chains') ? (document.getElementById('groupByFoundation')?.checked===true) : (document.getElementById('depGroupByFoundation')?.checked===true);
   const maxH=(containerId==='chains') ? (document.getElementById('chainsMaxH')?.value||420) : (document.getElementById('depMaxH')?.value||420);
@@ -249,7 +323,8 @@ function renderChainsInto(rows, containerId, mapStore){
 
   const groups={};
   rows.forEach(r=>{ const key=byF?r.foundation:(r.foundation+'::'+r.cert_name); (groups[key]=groups[key]||[]).push(r); });
-  const keys=Object.keys(groups).sort();
+  let keys=Object.keys(groups).sort();
+  if (keys.length > MAX_CARDS) keys = keys.slice(0, MAX_CARDS);
   if(keys.length===0){ const card=document.createElement('div'); card.className='card'; card.innerHTML='<strong>No chains to display</strong>'; el.appendChild(card); return; }
 
   let idx=0;
@@ -373,7 +448,12 @@ function resortCard(idx, mode, MAP=CARD_DATA_MAIN, containerId='chains'){
   const canvas=cardEl.querySelector('.chain-canvas'); canvas.innerHTML='';
   function tier(title, arr){
     const div=document.createElement('div'); div.className='tier'; div.innerHTML=`<h5>${title}</h5><div class="chips"></div>`;
-    const grid=div.querySelector('.chips'); arr.slice().sort(sortFn).forEach(n=>grid.insertAdjacentHTML('beforeend', chipHTML(n))); canvas.appendChild(div);
+    const grid=div.querySelector('.chips');
+    const list = arr.slice().sort(sortFn);
+    const cap = list.length > MAX_CHIPS_PER_TIER ? list.slice(0, MAX_CHIPS_PER_TIER) : list;
+    cap.forEach(n=>grid.insertAdjacentHTML('beforeend', chipHTML(n)));
+    if (list.length > cap.length){ const note=document.createElement('div'); note.className='muted'; note.textContent = `+${list.length-cap.length} more hidden`; div.appendChild(note); }
+    canvas.appendChild(div);
   }
   tier('ROOT CAs',roots); tier('TRANSITIONAL CAs',transCAs);
   for(let d=1; d<=maxInterDepth; d++) tier('INTERMEDIATE d'+d, (interLevels[d]||[]));
