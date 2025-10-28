@@ -224,8 +224,8 @@ function wireButtons(){
   const btnRunbook = document.getElementById('btnRunbook');
   if (btnRunbook) btnRunbook.addEventListener('click', ()=> window.open('/api/runbook','_blank'));
 
-  const btnDebug = document.getElementById('btnDebug');
-  if (btnDebug) btnDebug.addEventListener('click', toggleDebug);
+  const dbg = document.getElementById('btnDebug');
+  if (dbg) dbg.addEventListener('click', toggleDebug);
 
   const btnDebug = document.getElementById('btnDebug');
   if (btnDebug) btnDebug.addEventListener('click', ()=>{ document.body.classList.toggle('debug-open'); const el=document.getElementById('debugLog'); if(el){ el.textContent = (__DBG.logs||[]).map(l=>`[${l.time}] ${l.kind}: ${l.msg}${l.meta && l.meta.where?` (at ${l.meta.where})`:''}`).join('\n'); } });
