@@ -1,0 +1,94 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Maestro Certificate Rotation Dashboard</title>
+  <link rel="stylesheet" href="/static/css/app.css" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+</head>
+<body>
+  <div id="errorBanner" class="error-banner" style="display:none;"></div>
+
+  <h2>Maestro Certificate Rotation Dashboard</h2>
+
+  <div class="card row" style="align-items:center;">
+    <label>Watch Folder:&nbsp;<input id="watchDir" style="min-width:340px;" placeholder="/path/to/dir"/></label>
+    <button class="btn" id="btnLoad">Load</button>
+    <button class="btn" id="btnRefresh">Refresh</button>
+    <button class="btn" id="btnCSV">Export CSV</button>
+    <button class="btn" id="btnJSON">Export JSON</button>
+    <button class="btn" id="btnRunbook">Runbook.md</button>
+    <span class="muted" id="status"></span>
+  </div>
+
+  <div class="card" style="margin-top:12px;">
+    <div class="tabs">
+      <div class="tab active" data-tab="timeline">Timeline</div>
+      <div class="tab" data-tab="table">Table</div>
+      <div class="tab" data-tab="chains">Chains</div>
+      <div class="tab" data-tab="insights">Insights</div>
+    </div>
+
+    <div id="panel-timeline" class="tab-panel active">
+      <div class="row" style="margin:8px 0;">
+        <label class="muted">Foundation</label>
+        <select id="fnd"></select>
+        <label class="muted">SLA</label>
+        <select id="sla">
+          <option value="all">All</option>
+          <option value="<=30">&#8804;30</option>
+          <option value="<=60">&#8804;60</option>
+          <option value="<=90">&#8804;90</option>
+          <option value=">90">&gt;90</option>
+          <option value="no-date">No date</option>
+        </select>
+        <label class="chk"><input type="checkbox" id="onlyActive"/>Only active</label>
+        <label class="chk"><input type="checkbox" id="onlyCA"/>Only CA</label>
+        <label class="chk"><input type="checkbox" id="onlyTrans"/>Only transitional</label>
+      </div>
+      <canvas id="chart" height="520"></canvas>
+    </div>
+
+    <div id="panel-table" class="tab-panel">
+      <div style="max-height:520px; overflow:auto;">
+        <table id="tbl">
+          <thead>
+            <tr>
+              <th>Foundation</th><th>Cert</th><th>Version</th><th>Issuer</th>
+              <th>Active</th><th>CA</th><th>T</th><th>Deployments</th>
+              <th>Valid Until</th><th>Days</th><th>SLA</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div id="panel-chains" class="tab-panel">
+      <div class="row" style="margin:8px 0; gap:16px;">
+        <label class="chk"><input type="checkbox" id="chainsUseFilters" checked/>Chains use current filters</label>
+        <label class="chk"><input type="checkbox" id="groupByFoundation"/>Group by foundation</label>
+        <label>Zoom <input type="range" min="50" max="200" value="100" id="chainsZoom" /> <span id="chainsZoomVal">100%</span></label>
+        <label>Card height <input type="number" id="chainsMaxH" value="420" style="width:80px;" /> px</label>
+      </div>
+      <div id="chains" class="grid"></div>
+    </div>
+
+    <div id="panel-insights" class="tab-panel">
+      <div class="row" style="margin-bottom:8px;">
+        <label class="muted">Heatmap view</label>
+        <select id="insightsView">
+          <option value="monthly">Monthly panels</option>
+          <option value="calendar">Calendar strip</option>
+          <option value="hist">Weekly histogram</option>
+        </select>
+        <label class="chk"><input type="checkbox" id="groupHeatByFoundation"/>Group heatmap by foundation</label>
+      </div>
+      <div id="insights" class="grid"></div>
+    </div>
+  </div>
+
+  <script src="/static/js/app.js"></script>
+</body>
+</html>
