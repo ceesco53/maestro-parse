@@ -131,8 +131,8 @@ function wireTabs(){
 }
 
 function wireButtons(){
-  const $=id=>document.getElementById(id);
-  const clr=$('btnClearHL'); if(clr) clr.addEventListener('click', clearHighlight);
+  const clr=document.getElementById('btnClearHL');
+  if(clr) clr.addEventListener('click', clearHighlight);
   document.addEventListener('keydown', (e)=>{ if(e.key==='Escape') clearHighlight(); });
 
   const $=id=>document.getElementById(id);
