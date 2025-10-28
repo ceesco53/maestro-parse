@@ -136,14 +136,21 @@ function wireTabs(){
 }
 
 function wireButtons(){
-  const $=id=>document.getElementById(id);
-  const clr=$('btnClearHL'); if(clr) clr.addEventListener('click', clearHighlight);
+  const clr = document.getElementById('btnClearHL');
+  if (clr) clr.addEventListener('click', clearHighlight);
   document.addEventListener('keydown', (e)=>{ if(e.key==='Escape') clearHighlight(); });
 
-  document.getElementById('btnClear').addEventListener('click', ()=>{ RAW_ROWS=[]; renderAll(); setStatus('Cleared'); });
-  document.getElementById('btnCSV').addEventListener('click', ()=> window.open('/api/export/csv','_blank'));
-  document.getElementById('btnJSON').addEventListener('click', ()=> window.open('/api/export/json','_blank'));
-  document.getElementById('btnRunbook').addEventListener('click', ()=> window.open('/api/runbook','_blank'));
+  const btnClear = document.getElementById('btnClear');
+  if (btnClear) btnClear.addEventListener('click', ()=>{ RAW_ROWS=[]; renderAll(); setStatus('Cleared'); });
+
+  const btnCSV = document.getElementById('btnCSV');
+  if (btnCSV) btnCSV.addEventListener('click', ()=> window.open('/api/export/csv','_blank'));
+
+  const btnJSON = document.getElementById('btnJSON');
+  if (btnJSON) btnJSON.addEventListener('click', ()=> window.open('/api/export/json','_blank'));
+
+  const btnRunbook = document.getElementById('btnRunbook');
+  if (btnRunbook) btnRunbook.addEventListener('click', ()=> window.open('/api/runbook','_blank'));
 }
 
 function refreshRows(){ fetch('/api/rows').then(r=>r.json()).then(rows=>{ RAW_ROWS=rows; populateFoundationSelect(); populateDeploymentDatalist(); renderAll(); }).catch(e=>showError(e.message)); }
