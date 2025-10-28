@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-# Maestro Certificate Rotation Dashboard (multi-file, Option A fix-only)
-import os, io, glob, hashlib, datetime as dt
-from typing import Any, Dict, List, Optional
+# Maestro Certificate Rotation Dashboard — Drag & Drop Upload version
+import io, os, hashlib, datetime as dt
+from typing import Any, Dict, List, Optional, Tuple
 from flask import Flask, request, Response, jsonify, render_template
 
-try:
-    import yaml  # type: ignore
-except Exception:
-    raise SystemExit("Please install PyYAML: pip install -r requirements.txt")
+import yaml
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
+
+# In-memory storage per-process
+ROWS: List[Dict[str, Any]] = []
+LAST_SIG: str = ""
 
 def _parse_dt(s: Optional[str]):
     if not s: return None
@@ -62,68 +62,57 @@ def _flatten_doc(doc: Dict[str, Any], foundation: str) -> List[Dict[str, Any]]:
             })
     return rows
 
-def _load_dir(dirpath: str) -> List[Dict[str, Any]]:
-    out: List[Dict[str, Any]] = []
-    ymls = []
-    ymls.extend(glob.glob(os.path.join(dirpath, "*.yml")))
-    ymls.extend(glob.glob(os.path.join(dirpath, "*.yaml")))
-    for path in sorted(ymls):
-        foundation = os.path.splitext(os.path.basename(path))[0]
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                doc = yaml.safe_load(f)
-            out.extend(_flatten_doc(doc, foundation))
-        except Exception as e:
-            print("Failed to parse", path, ":", e)
-    return out
-
-def _dir_signature(dirpath: str) -> str:
-    files = []
-    files.extend(glob.glob(os.path.join(dirpath, "*.yml")))
-    files.extend(glob.glob(os.path.join(dirpath, "*.yaml")))
-    sig_items = []
-    for p in sorted(files):
-        try:
-            st = os.stat(p)
-            sig_items.append(f"{os.path.basename(p)}:{int(st.st_mtime)}:{st.st_size}")
-        except Exception:
-            continue
-    return hashlib.sha256("|".join(sig_items).encode("utf-8")).hexdigest()
+def _sig_for_files(files):
+    import hashlib
+    h = hashlib.sha256()
+    for name, data in files:
+        h.update(name.encode("utf-8")+b"\x00"+data)
+    return h.hexdigest()
 
 @app.route("/")
 def index():
     return render_template("index.html")
 
+@app.route("/api/upload", methods=["POST"])
+def api_upload():
+    global ROWS, LAST_SIG
+    fobjs = request.files.getlist("files")
+    if not fobjs:
+        return jsonify({"ok": False, "error": "no files"}), 400
+
+    loaded = []
+    file_pairs = []
+    for f in fobjs:
+        try:
+            raw = f.read()
+            file_pairs.append((f.filename, raw))
+            doc = yaml.safe_load(raw.decode("utf-8", errors="replace"))
+            foundation = os.path.splitext(os.path.basename(f.filename))[0]
+            loaded.extend(_flatten_doc(doc, foundation))
+        except Exception as e:
+            return jsonify({"ok": False, "error": f"parse failed for {f.filename}: {e}"}), 400
+
+    ROWS = loaded
+    LAST_SIG = _sig_for_files(file_pairs)
+    return jsonify({"ok": True, "rows": len(ROWS), "sig": LAST_SIG})
+
 @app.route("/api/rows")
 def api_rows():
-    dirpath = request.args.get("dir", "").strip()
-    if not dirpath or not os.path.isdir(dirpath):
-        return jsonify([])
-    return jsonify(_load_dir(dirpath))
+    return jsonify(ROWS or [])
 
 @app.route("/api/version")
 def api_version():
-    dirpath = request.args.get("dir", "").strip()
-    if not dirpath or not os.path.isdir(dirpath):
-        return jsonify({"sig": ""})
-    return jsonify({"sig": _dir_signature(dirpath)})
+    return jsonify({"sig": LAST_SIG})
 
 @app.route("/api/export/json")
 def api_export_json():
-    dirpath = request.args.get("dir", "").strip()
-    if not dirpath or not os.path.isdir(dirpath):
-        return jsonify([])
-    return jsonify(_load_dir(dirpath))
+    return jsonify(ROWS or [])
 
 @app.route("/api/export/csv")
 def api_export_csv():
-    dirpath = request.args.get("dir", "").strip()
-    if not dirpath or not os.path.isdir(dirpath):
-        return Response("", mimetype="text/csv")
-    rows = _load_dir(dirpath)
     out = io.StringIO()
     out.write("foundation,cert_name,version_id_short,issuer,active,certificate_authority,transitional,deployments,valid_until,days_remaining\n")
-    for r in rows:
+    for r in ROWS:
         out.write(",".join([
             r["foundation"], r["cert_name"], r["version_id_short"],
             (r.get("issuer") or "").replace(",", ";"),
@@ -139,15 +128,11 @@ def api_export_csv():
 
 @app.route("/api/runbook")
 def api_runbook():
-    dirpath = request.args.get("dir", "").strip()
-    if not dirpath or not os.path.isdir(dirpath):
-        return Response("# Runbook\n\n_No directory provided._\n", mimetype="text/markdown")
-    rows = _load_dir(dirpath)
     def md(s): return (s or "").replace("|","\\|")
     out = io.StringIO()
     out.write("# Certificate Rotation Runbook\n\n")
-    cas = [r for r in rows if r["certificate_authority"]]
-    leaves = [r for r in rows if not r["certificate_authority"]]
+    cas = [r for r in ROWS if r["certificate_authority"]]
+    leaves = [r for r in ROWS if not r["certificate_authority"]]
     cas.sort(key=lambda r: (r["days_remaining"] if r["days_remaining"] is not None else 9000000))
     leaves.sort(key=lambda r: (r["days_remaining"] if r["days_remaining"] is not None else 9000000))
     out.write("## Phase 1 — CAs\n")
@@ -158,5 +143,4 @@ def api_runbook():
                     headers={"Content-Disposition":"attachment; filename=Runbook.md"})
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", "5000"))
-    app.run(host="127.0.0.1", port=port, debug=True)
+    app.run(host="127.0.0.1", port=int(os.environ.get("PORT","5000")), debug=True)

@@ -32,3 +32,5 @@ thead th{position:sticky;top:0;background:#f1f5f9}
 .mini h5{margin:0 0 6px 0;font-size:13px}
 .error-banner{position:sticky;top:0;background:#fee2e2;color:#7f1d1d;padding:8px 12px;border:1px solid #fecaca;border-radius:8px;margin-bottom:12px;z-index:1000}
 .chk{display:flex;align-items:center;gap:6px}
+.drop-zone{border:2px dashed #94a3b8;border-radius:12px;padding:14px 16px;background:#f8fafc;cursor:pointer;display:flex;flex-direction:column;gap:4px;min-width:280px}
+.drop-zone.drag{background:#eef2ff;border-color:#6366f1}

@@ -12,10 +12,13 @@
 
   <h2>Maestro Certificate Rotation Dashboard</h2>
 
-  <div class="card row" style="align-items:center;">
-    <label>Watch Folder:&nbsp;<input id="watchDir" style="min-width:340px;" placeholder="/path/to/dir"/></label>
-    <button class="btn" id="btnLoad">Load</button>
-    <button class="btn" id="btnRefresh">Refresh</button>
+  <div class="card row" style="align-items:center; gap:16px;">
+    <div id="dropZone" class="drop-zone">
+      <strong>Drop Maestro YAML files here</strong>
+      <span class="muted">or click to select</span>
+      <input id="fileInput" type="file" accept=".yml,.yaml" multiple hidden>
+    </div>
+    <button class="btn" id="btnClear">Clear</button>
     <button class="btn" id="btnCSV">Export CSV</button>
     <button class="btn" id="btnJSON">Export JSON</button>
     <button class="btn" id="btnRunbook">Runbook.md</button>
@@ -67,7 +70,6 @@
 
     <div id="panel-chains" class="tab-panel">
       <div class="row" style="margin:8px 0; gap:16px;">
-        <label class="chk"><input type="checkbox" id="chainsUseFilters" checked/>Chains use current filters</label>
         <label class="chk"><input type="checkbox" id="groupByFoundation"/>Group by foundation</label>
         <label>Zoom <input type="range" min="50" max="200" value="100" id="chainsZoom" /> <span id="chainsZoomVal">100%</span></label>
         <label>Card height <input type="number" id="chainsMaxH" value="420" style="width:80px;" /> px</label>
