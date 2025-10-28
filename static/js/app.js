@@ -36,9 +36,9 @@ function wireDnD(){
   ['dragenter','dragover'].forEach(evt => dz.addEventListener(evt, (e)=>{
     e.preventDefault(); e.stopPropagation(); dz.classList.add('drag');
   }));
-  ['dragleave','drop'].forEach evt => dz.addEventListener(evt, (e)=>{
+  ['dragleave','drop'].forEach (evt => dz.addEventListener(evt, (e)=>{
     e.preventDefault(); e.stopPropagation(); dz.classList.remove('drag');
-  });
+  }));
   dz.addEventListener('drop', (e)=>{
     const files = e.dataTransfer.files;
     if(files && files.length) upload(files);
