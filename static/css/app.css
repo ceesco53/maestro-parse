@@ -1,1 +1,8 @@
+.tab-panel {
+  display: none;
+}
+
+.tab-panel.active {
+  display: block;
+}
 body{font-family:sans-serif;margin:24px}
