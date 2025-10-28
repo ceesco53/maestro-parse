@@ -31,6 +31,7 @@
       <div class="tab" data-tab="table">Table</div>
       <div class="tab" data-tab="chains">Chains</div>
       <div class="tab" data-tab="insights">Insights</div>
+      <div class="tab" data-tab="deploy">Deployments</div>
     </div>
 
     <div id="panel-timeline" class="tab-panel active">
@@ -89,6 +90,22 @@
       </div>
       <div id="insights" class="grid"></div>
     </div>
+
+    <div id="panel-deploy" class="tab-panel">
+      <div class="row" style="margin:8px 0; gap:16px;">
+        <label>deployment_name
+          <input id="depQuery" list="depList" placeholder="e.g., diego-cell, router, uaa" style="min-width:280px;" />
+        </label>
+        <datalist id="depList"></datalist>
+        <label class="chk"><input type="checkbox" id="depExact"/>Exact match</label>
+        <label class="chk"><input type="checkbox" id="depGroupByFoundation" checked/>Group by foundation</label>
+        <label>Zoom <input type="range" min="50" max="200" value="100" id="depZoom" /> <span id="depZoomVal">100%</span></label>
+        <label>Card height <input type="number" id="depMaxH" value="420" style="width:80px;" /> px</label>
+      </div>
+      <div id="deployChains" class="grid"></div>
+      <div id="deployHelp" class="card" style="display:none;"></div>
+    </div>
+
   </div>
 
   <script src="/static/js/app.js"></script>
