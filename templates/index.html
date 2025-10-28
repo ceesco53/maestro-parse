@@ -1,62 +1,66 @@
 <!doctype html>
 <html>
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta charset=\"utf-8\" />
+  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
   <title>Maestro Certificate Rotation Dashboard</title>
-  <link rel="stylesheet" href="/static/css/app.css" />
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+  <link rel=\"stylesheet\" href=\"/static/css/app.css\" />
 </head>
 <body>
-  <div id="errorBanner" class="error-banner" style="display:none;"></div>
+  <div id=\"errorBanner\" class=\"error-banner\" style=\"display:none;\"></div>
 
-  <h2>Maestro Certificate Rotation Dashboard</h2>
+  <header class=\"topbar\">
+    <h1>Maestro Certificate Rotation Dashboard</h1>
+    <div class=\"actions\">
+      <button class=\"btn\" id=\"btnCSV\">Export CSV</button>
+      <button class=\"btn\" id=\"btnJSON\">Export JSON</button>
+      <button class=\"btn\" id=\"btnRunbook\">Runbook.md</button>
+    </div>
+  </header>
 
-  <div class="card row" style="align-items:center; gap:16px;">
-    <div id="dropZone" class="drop-zone">
+  <section class=\"uploader card\">
+    <div id=\"dropZone\" class=\"drop-zone\">
       <strong>Drop Maestro YAML files here</strong>
-      <span class="muted">or click to select</span>
-      <input id="fileInput" type="file" accept=".yml,.yaml" multiple hidden>
+      <span class=\"muted\">or click to select</span>
+      <input id=\"fileInput\" type=\"file\" accept=\".yml,.yaml\" multiple hidden>
     </div>
-    <button class="btn" id="btnClear">Clear</button>
-    <button class="btn" id="btnCSV">Export CSV</button>
-    <button class="btn" id="btnJSON">Export JSON</button>
-    <button class="btn" id="btnRunbook">Runbook.md</button>
-    <span class="muted" id="status"></span>
-  </div>
+    <button class=\"btn\" id=\"btnClear\">Clear</button>
+    <span id=\"status\" class=\"muted\"></span>
+  </section>
 
-  <div class="card" style="margin-top:12px;">
-    <div class="tabs">
-      <div class="tab active" data-tab="timeline">Timeline</div>
-      <div class="tab" data-tab="table">Table</div>
-      <div class="tab" data-tab="chains">Chains</div>
-      <div class="tab" data-tab="insights">Insights</div>
-      <div class="tab" data-tab="deploy">Deployments</div>
-    </div>
+  <section class=\"card\">
+    <nav class=\"tabs\">
+      <button class=\"tab active\" data-tab=\"timeline\">Timeline</button>
+      <button class=\"tab\" data-tab=\"table\">Table</button>
+      <button class=\"tab\" data-tab=\"chains\">Chains</button>
+      <button class=\"tab\" data-tab=\"insights\">Insights</button>
+      <button class=\"tab\" data-tab=\"deploy\">Deployments</button>
+    </nav>
 
-    <div id="panel-timeline" class="tab-panel active">
-      <div class="row" style="margin:8px 0;">
-        <label class="muted">Foundation</label>
-        <select id="fnd"></select>
-        <label class="muted">SLA</label>
-        <select id="sla">
-          <option value="all">All</option>
-          <option value="<=30">&#8804;30</option>
-          <option value="<=60">&#8804;60</option>
-          <option value="<=90">&#8804;90</option>
-          <option value=">90">&gt;90</option>
-          <option value="no-date">No date</option>
-        </select>
-        <label class="chk"><input type="checkbox" id="onlyActive"/>Only active</label>
-        <label class="chk"><input type="checkbox" id="onlyCA"/>Only CA</label>
-        <label class="chk"><input type="checkbox" id="onlyTrans"/>Only transitional</label>
+    <div id=\"panel-timeline\" class=\"tab-panel active\">
+      <div class=\"controls\">
+        <label>Foundation <select id=\"fnd\"></select></label>
+        <label>SLA
+          <select id=\"sla\">
+            <option value=\"all\">All</option>
+            <option value=\"<=30\">&#8804;30</option>
+            <option value=\"<=60\">&#8804;60</option>
+            <option value=\"<=90\">&#8804;90</option>
+            <option value=\">90\">&gt;90</option>
+            <option value=\"no-date\">No date</option>
+          </select>
+        </label>
+        <label class=\"chk\"><input type=\"checkbox\" id=\"onlyActive\">Only active</label>
+        <label class=\"chk\"><input type=\"checkbox\" id=\"onlyCA\">Only CA</label>
+        <label class=\"chk\"><input type=\"checkbox\" id=\"onlyTrans\">Only transitional</label>
       </div>
-      <canvas id="chart" height="520"></canvas>
+      <div id=\"timelineEmpty\" class=\"empty muted\">Upload Maestro files to see a timeline.</div>
+      <div id=\"timelineList\" class=\"list\"></div>
     </div>
 
-    <div id="panel-table" class="tab-panel">
-      <div style="max-height:520px; overflow:auto;">
-        <table id="tbl">
+    <div id=\"panel-table\" class=\"tab-panel\">
+      <div class=\"table-wrap\">
+        <table id=\"tbl\">
           <thead>
             <tr>
               <th>Foundation</th><th>Cert</th><th>Version</th><th>Issuer</th>
@@ -69,45 +73,46 @@
       </div>
     </div>
 
-    <div id="panel-chains" class="tab-panel">
-      <div class="row" style="margin:8px 0; gap:16px;">
-        <label class="chk"><input type="checkbox" id="groupByFoundation"/>Group by foundation</label>
-        <label>Zoom <input type="range" min="50" max="200" value="100" id="chainsZoom" /> <span id="chainsZoomVal">100%</span></label>
-        <label>Card height <input type="number" id="chainsMaxH" value="420" style="width:80px;" /> px</label>
+    <div id=\"panel-chains\" class=\"tab-panel\">
+      <div class=\"controls\">
+        <label class=\"chk\"><input type=\"checkbox\" id=\"groupByFoundation\">Group by foundation</label>
+        <label>Zoom <input type=\"range\" min=\"50\" max=\"200\" value=\"100\" id=\"chainsZoom\"> <span id=\"chainsZoomVal\">100%</span></label>
+        <label>Card height <input type=\"number\" id=\"chainsMaxH\" value=\"420\" style=\"width:80px;\"> px</label>
       </div>
-      <div id="chains" class="grid"></div>
+      <div id=\"chains\" class=\"grid\"></div>
     </div>
 
-    <div id="panel-insights" class="tab-panel">
-      <div class="row" style="margin-bottom:8px;">
-        <label class="muted">Heatmap view</label>
-        <select id="insightsView">
-          <option value="monthly">Monthly panels</option>
-          <option value="calendar">Calendar strip</option>
-          <option value="hist">Weekly histogram</option>
-        </select>
-        <label class="chk"><input type="checkbox" id="groupHeatByFoundation"/>Group heatmap by foundation</label>
-      </div>
-      <div id="insights" class="grid"></div>
-    </div>
-
-    <div id="panel-deploy" class="tab-panel">
-      <div class="row" style="margin:8px 0; gap:16px;">
-        <label>deployment_name
-          <input id="depQuery" list="depList" placeholder="e.g., diego-cell, router, uaa" style="min-width:280px;" />
+    <div id=\"panel-insights\" class=\"tab-panel\">
+      <div class=\"controls\">
+        <label>Heatmap view
+          <select id=\"insightsView\">
+            <option value=\"monthly\">Monthly panels</option>
+            <option value=\"calendar\">Calendar strip</option>
+            <option value=\"hist\">Weekly histogram</option>
+          </select>
         </label>
-        <datalist id="depList"></datalist>
-        <label class="chk"><input type="checkbox" id="depExact"/>Exact match</label>
-        <label class="chk"><input type="checkbox" id="depGroupByFoundation" checked/>Group by foundation</label>
-        <label>Zoom <input type="range" min="50" max="200" value="100" id="depZoom" /> <span id="depZoomVal">100%</span></label>
-        <label>Card height <input type="number" id="depMaxH" value="420" style="width:80px;" /> px</label>
+        <label class=\"chk\"><input type=\"checkbox\" id=\"groupHeatByFoundation\">Group heatmap by foundation</label>
       </div>
-      <div id="deployChains" class="grid"></div>
-      <div id="deployHelp" class="card" style="display:none;"></div>
+      <div id=\"insights\" class=\"grid\"></div>
     </div>
 
-  </div>
+    <div id=\"panel-deploy\" class=\"tab-panel\">
+      <div class=\"controls\">
+        <label>deployment_name
+          <input id=\"depQuery\" list=\"depList\" placeholder=\"e.g., diego-cell, router, uaa\" style=\"min-width:280px;\">
+        </label>
+        <datalist id=\"depList\"></datalist>
+        <label class=\"chk\"><input type=\"checkbox\" id=\"depExact\">Exact match</label>
+        <label class=\"chk\"><input type=\"checkbox\" id=\"depGroupByFoundation\" checked>Group by foundation</label>
+        <label>Zoom <input type=\"range\" min=\"50\" max=\"200\" value=\"100\" id=\"depZoom\"> <span id=\"depZoomVal\">100%</span></label>
+        <label>Card height <input type=\"number\" id=\"depMaxH\" value=\"420\" style=\"width:80px;\"> px</label>
+      </div>
+      <div id=\"deployChains\" class=\"grid\"></div>
+      <div id=\"deployHelp\" class=\"card\" style=\"display:none;\"></div>
+    </div>
 
-  <script src="/static/js/app.js"></script>
+  </section>
+
+  <script src=\"/static/js/app.js\"></script>
 </body>
 </html>
