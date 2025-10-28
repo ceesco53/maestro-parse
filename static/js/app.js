@@ -313,9 +313,9 @@ function renderTable(rows){
 function renderChainsMain(rows){ CARD_DATA_MAIN={}; renderChainsInto(rows,'chains',CARD_DATA_MAIN); }
 function renderChainsInto(rows, containerId, mapStore){
   // Hard caps for safety in massive topologies
-  const MAX_CARDS = 300;
-  const MAX_CHIPS_PER_TIER = 5000;
-  if (rows.length > 150000){ __DBG.push('warn','Huge dataset; truncating rows to protect UI'); rows = rows.slice(0,150000); }
+  const MAX_CARDS = 250;
+  const MAX_CHIPS_PER_TIER = 1500;
+  if (rows.length > 120000){ __DBG.push('warn','Huge dataset; truncating rows to protect UI'); rows = rows.slice(0,120000); }
   const el=document.getElementById(containerId); if(!el) return; el.innerHTML='';
   const byF=(containerId==='chains') ? (document.getElementById('groupByFoundation')?.checked===true) : (document.getElementById('depGroupByFoundation')?.checked===true);
   const maxH=(containerId==='chains') ? (document.getElementById('chainsMaxH')?.value||420) : (document.getElementById('depMaxH')?.value||420);
@@ -449,10 +449,31 @@ function resortCard(idx, mode, MAP=CARD_DATA_MAIN, containerId='chains'){
   function tier(title, arr){
     const div=document.createElement('div'); div.className='tier'; div.innerHTML=`<h5>${title}</h5><div class="chips"></div>`;
     const grid=div.querySelector('.chips');
-    const list = arr.slice().sort(sortFn);
-    const cap = list.length > MAX_CHIPS_PER_TIER ? list.slice(0, MAX_CHIPS_PER_TIER) : list;
-    cap.forEach(n=>grid.insertAdjacentHTML('beforeend', chipHTML(n)));
-    if (list.length > cap.length){ const note=document.createElement('div'); note.className='muted'; note.textContent = `+${list.length-cap.length} more hidden`; div.appendChild(note); }
+    let list = arr.slice();
+    if (list.length <= 1500) {
+      try { list.sort(sortFn); } catch(e){ __DBG.push('warn','sort failed: '+(e.message||e)); }
+    } else {
+      // Avoid deep recursion in engine sort for very large tiers
+      __DBG.push('info', `skip sort for tier '${title}' size=${list.length}`);
+    }
+    if (list.length > MAX_CHIPS_PER_TIER){
+      __DBG.push('info', `cap tier '${title}' from ${list.length} to ${MAX_CHIPS_PER_TIER}`);
+      list = list.slice(0, MAX_CHIPS_PER_TIER);
+    }
+    // Chunked DOM insertion to avoid long sync tasks
+    const CHUNK = 400;
+    let i = 0;
+    function pump(){
+      const end = Math.min(i+CHUNK, list.length);
+      for (; i<end; i++){
+        const n = list[i];
+        grid.insertAdjacentHTML('beforeend', chipHTML(n));
+      }
+      if (i < list.length){ requestAnimationFrame(pump); }
+    }
+    pump();
+    // Tail note if truncated
+    if (arr.length > list.length){ const note=document.createElement('div'); note.className='muted'; note.textContent = `+${arr.length-list.length} more hidden`; div.appendChild(note); }
     canvas.appendChild(div);
   }
   tier('ROOT CAs',roots); tier('TRANSITIONAL CAs',transCAs);
