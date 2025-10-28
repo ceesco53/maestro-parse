@@ -1,12 +1,35 @@
 document.addEventListener('DOMContentLoaded', init);
-const COLORS={"<=30":"#e11d48","<=60":"#f97316","<=90":"#ca8a04",">90":"#16a34a","no-date":"#6b7280"};
-let RAW_ROWS=[]; let CARD_DATA_MAIN={}; let CARD_DATA_DEP={};
 
-function init(){ wireDnD(); wireTabs(); wireButtons(); }
-function showError(msg){const b=document.getElementById('errorBanner'); if(!b) return; b.textContent=msg; b.style.display='block';}
-function setStatus(msg){const s=document.getElementById('status'); if(s) s.textContent=msg||'';}
+const COLORS = {"<=30":"#e11d48","<=60":"#f97316","<=90":"#ca8a04",">90":"#16a34a","no-date":"#6b7280"};
+let RAW_ROWS = [];
+let CARD_DATA_MAIN = {};
+let CARD_DATA_DEP = {};
+
+function init(){
+  wireDnD();
+  wireTabs();
+  wireButtons();
+  // dynamic 1–4 columns for grids marked with [data-dynamic-cols]
+  applyDynamicCols();
+  window.addEventListener('resize', applyDynamicCols);
+}
+
+function applyDynamicCols(){
+  document.querySelectorAll('[data-dynamic-cols]').forEach(setGridCols);
+  function setGridCols(el){
+    const width = el.clientWidth || el.parentElement?.clientWidth || window.innerWidth;
+    // aim ~420px per card; clamp to 1..4 cols
+    let cols = Math.max(1, Math.min(4, Math.floor(width / 420)));
+    // If width very large but few cards exist, CSS will still respect the repeat count
+    el.style.setProperty('--cols', cols);
+  }
+}
+
+function showError(msg){ const b=document.getElementById('errorBanner'); if(!b) return; b.textContent=msg; b.style.display='block'; }
+function setStatus(msg){ const s=document.getElementById('status'); if(s) s.textContent=msg||''; }
 function toBucket(n){ if(n===null||n===undefined||n==='') return 'no-date'; n=Number(n); if(n<=30) return '<=30'; if(n<=60) return '<=60'; if(n<=90) return '<=90'; return '>90'; }
 
+/* Uploader */
 function wireDnD(){
   const dz=document.getElementById('dropZone'), fi=document.getElementById('fileInput');
   dz.addEventListener('click', ()=> fi.click());
@@ -14,30 +37,38 @@ function wireDnD(){
   ['dragenter','dragover'].forEach(evt => dz.addEventListener(evt, e=>{e.preventDefault(); e.stopPropagation(); dz.classList.add('drag');}));
   ['dragleave','drop'].forEach(evt => dz.addEventListener(evt, e=>{e.preventDefault(); e.stopPropagation(); dz.classList.remove('drag');}));
   dz.addEventListener('drop', e=>{ const files=e.dataTransfer.files; if(files && files.length) upload(files); });
+
   function upload(files){
     const fd=new FormData(); Array.from(files).forEach(f=>fd.append('files',f,f.name));
     setStatus('Uploading...');
-    fetch('/api/upload',{method:'POST',body:fd}).then(r=>{if(!r.ok) throw new Error('HTTP '+r.status); return r.json();})
+    fetch('/api/upload',{method:'POST',body:fd})
+      .then(r=>{if(!r.ok) throw new Error('HTTP '+r.status); return r.json();})
       .then(j=>{ if(!j.ok) throw new Error(j.error||'Upload failed'); setStatus('Loaded '+j.rows+' rows'); refreshRows(); })
       .catch(e=>showError(e.message));
   }
 }
 
+/* Tabs + filters */
 function wireTabs(){
   document.querySelectorAll('.tab').forEach(el=>el.addEventListener('click', ()=>{
     document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
     document.querySelectorAll('.tab-panel').forEach(p=>p.classList.remove('active'));
-    el.classList.add('active'); document.getElementById('panel-'+el.dataset.tab).classList.add('active'); renderAll();
+    el.classList.add('active');
+    document.getElementById('panel-'+el.dataset.tab).classList.add('active');
+    renderAll();
   }));
   const fnd=document.getElementById('fnd'); if(fnd) fnd.innerHTML='<option value="all">All</option>';
   ['fnd','sla','onlyActive','onlyCA','onlyTrans','groupByFoundation','chainsZoom','chainsMaxH','groupHeatByFoundation','insightsView',
-   'depQuery','depExact','depGroupByFoundation','depZoom','depMaxH'].forEach(id=>{
-    const el=document.getElementById(id); if(!el) return;
-    const evt=(el.tagName==='INPUT' && el.type==='range')?'input':'change';
-    el.addEventListener(evt, renderAll);
-  });
+   'depQuery','depExact','depGroupByFoundation','depZoom','depMaxH']
+    .forEach(id=>{
+      const el=document.getElementById(id); if(!el) return;
+      const evt=(el.tagName==='INPUT' && el.type==='range')?'input':'change';
+      el.addEventListener(evt, renderAll);
+    });
 }
-function wireButtons(){ const $=id=>document.getElementById(id);
+
+function wireButtons(){
+  const $=id=>document.getElementById(id);
   $('btnClear').addEventListener('click', ()=>{ RAW_ROWS=[]; renderAll(); setStatus('Cleared'); });
   $('btnCSV').addEventListener('click', ()=> window.open('/api/export/csv','_blank'));
   $('btnJSON').addEventListener('click', ()=> window.open('/api/export/json','_blank'));
@@ -45,30 +76,74 @@ function wireButtons(){ const $=id=>document.getElementById(id);
 }
 
 function refreshRows(){ fetch('/api/rows').then(r=>r.json()).then(rows=>{ RAW_ROWS=rows; populateFoundationSelect(); populateDeploymentDatalist(); renderAll(); }).catch(e=>showError(e.message)); }
-function populateFoundationSelect(){ const f=document.getElementById('fnd'); if(!f) return; const cur=f.value; const vals=[...new Set(RAW_ROWS.map(r=>r.foundation))].sort(); f.innerHTML='<option value="all">All</option>'+vals.map(v=>`<option value="${v}">${v}</option>`).join(''); if(vals.includes(cur)) f.value=cur; }
-function collectDeployments(){ const set=new Set(); RAW_ROWS.forEach(r=>{ const list=(r.deployments_list&&Array.isArray(r.deployments_list))?r.deployments_list:String(r.deployments||'').split(/[,;]\s*/); list.forEach(x=>{const v=(x||'').trim(); if(v) set.add(v);}); }); return [...set].sort((a,b)=>a.localeCompare(b)); }
-function populateDeploymentDatalist(){ const dl=document.getElementById('depList'); if(!dl) return; dl.innerHTML=collectDeployments().map(n=>`<option value="${n}">`).join(''); }
-
-function filteredRows(){ const fnd=document.getElementById('fnd').value||'all'; const sla=document.getElementById('sla').value||'all';
-  const onlyActive=document.getElementById('onlyActive').checked; const onlyCA=document.getElementById('onlyCA').checked; const onlyTrans=document.getElementById('onlyTrans').checked;
-  let data=RAW_ROWS.slice(); if(fnd!=='all') data=data.filter(r=>r.foundation===fnd); if(onlyActive) data=data.filter(r=>r.active); if(onlyCA) data=data.filter(r=>r.certificate_authority); if(onlyTrans) data=data.filter(r=>r.transitional); if(sla!=='all') data=data.filter(r=>toBucket(r.days_remaining)===sla);
-  data.sort((a,b)=>(a.days_remaining??9e9)-(b.days_remaining??9e9)||a.foundation.localeCompare(b.foundation)||a.cert_name.localeCompare(b.cert_name)); return data;
+function populateFoundationSelect(){
+  const fnd=document.getElementById('fnd'); if(!fnd) return;
+  const cur=fnd.value; const vals=Array.from(new Set(RAW_ROWS.map(r=>r.foundation))).sort();
+  fnd.innerHTML='<option value="all">All</option>'+vals.map(v=>`<option value="${v}">${v}</option>`).join('');
+  if(vals.includes(cur)) fnd.value=cur;
+}
+function collectDeployments(){
+  const set=new Set();
+  RAW_ROWS.forEach(r=>{
+    const list=(r.deployments_list&&Array.isArray(r.deployments_list))?r.deployments_list:String(r.deployments||'').split(/[,;]\s*/);
+    list.forEach(x=>{const v=(x||'').trim(); if(v) set.add(v);});
+  });
+  return Array.from(set).sort((a,b)=>a.localeCompare(b));
+}
+function populateDeploymentDatalist(){
+  const dl=document.getElementById('depList'); if(!dl) return;
+  dl.innerHTML = collectDeployments().map(n=>`<option value="${n}">`).join('');
 }
 
-function renderAll(){ const data=filteredRows(); renderTimeline(data); renderTable(data); renderChainsMain(data); renderInsights(data); renderDeployments(); }
+function filteredRows(){
+  const fnd=document.getElementById('fnd').value||'all';
+  const sla=document.getElementById('sla').value||'all';
+  const onlyActive=document.getElementById('onlyActive').checked;
+  const onlyCA=document.getElementById('onlyCA').checked;
+  const onlyTrans=document.getElementById('onlyTrans').checked;
+  let data=RAW_ROWS.slice();
+  if(fnd!=='all') data=data.filter(r=>r.foundation===fnd);
+  if(onlyActive) data=data.filter(r=>r.active);
+  if(onlyCA) data=data.filter(r=>r.certificate_authority);
+  if(onlyTrans) data=data.filter(r=>r.transitional);
+  if(sla!=='all') data=data.filter(r=>toBucket(r.days_remaining)===sla);
+  data.sort((a,b)=>(a.days_remaining??9e9)-(b.days_remaining??9e9)||a.foundation.localeCompare(b.foundation)||a.cert_name.localeCompare(b.cert_name));
+  return data;
+}
 
-function renderTimeline(rows){ const empty=document.getElementById('timelineEmpty'); const list=document.getElementById('timelineList');
-  if(!rows.length){ empty.style.display='block'; list.innerHTML=''; return; } empty.style.display='none';
-  list.innerHTML = rows.map(r=>{ const b=toBucket(r.days_remaining), color=COLORS[b]; const tags=[r.certificate_authority?'CA':null, r.transitional?'T':null, r.active?'ACTIVE':null].filter(Boolean).join(' • ');
+function renderAll(){
+  const data=filteredRows();
+  renderTimeline(data);
+  renderTable(data);
+  renderChainsMain(data);
+  renderInsights(data);
+  renderDeployments();
+  applyDynamicCols(); // recalc after DOM changes
+}
+
+/* Timeline — List cards */
+function renderTimeline(rows){
+  const empty=document.getElementById('timelineEmpty');
+  const list=document.getElementById('timelineList');
+  if(!rows.length){ empty.style.display='block'; list.innerHTML=''; return; }
+  empty.style.display='none';
+  list.innerHTML = rows.map(r=>{
+    const bucket=toBucket(r.days_remaining), color=COLORS[bucket];
+    const tags=[r.certificate_authority?'CA':null, r.transitional?'T':null, r.active?'ACTIVE':null].filter(Boolean).join(' • ');
     return `<div class="chip" style="border-color:${color}">
       <div class="line1"><strong>${r.foundation} / ${r.cert_name}</strong><span class="sla" style="background:${color}"></span></div>
       <div class="line2"><code>${r.version_id_short}</code> ${tags?('• '+tags):''}</div>
       <div class="line2"><span>${r.days_remaining??'NA'}d</span><span>${r.valid_until||r.valid_until_raw||''}</span></div>
-    </div>`; }).join('');
+    </div>`;
+  }).join('');
 }
 
-function renderTable(rows){ const tbody=document.querySelector('#tbl tbody'); if(!tbody) return; tbody.innerHTML='';
-  rows.forEach(r=>{ const b=toBucket(r.days_remaining); const tr=document.createElement('tr'); tr.innerHTML=`
+/* Table */
+function renderTable(rows){
+  const tbody=document.querySelector('#tbl tbody'); if(!tbody) return; tbody.innerHTML='';
+  rows.forEach(r=>{
+    const b=toBucket(r.days_remaining);
+    const tr=document.createElement('tr'); tr.innerHTML=`
       <td>${r.foundation}</td><td>${r.cert_name}</td><td><code>${r.version_id_short}</code></td>
       <td>${r.issuer||''}</td>
       <td>${r.active?'<span class="badge">ACTIVE</span>':''}</td>
@@ -77,10 +152,12 @@ function renderTable(rows){ const tbody=document.querySelector('#tbl tbody'); if
       <td>${r.deployments||''}</td>
       <td>${r.valid_until||r.valid_until_raw||''}</td>
       <td style="text-align:right;">${r.days_remaining??''}</td>
-      <td><span class="badge" style="background:${COLORS[b]}">${b}</span></td>`; tbody.appendChild(tr);
+      <td><span class="badge" style="background:${COLORS[b]}">${b}</span></td>`;
+    tbody.appendChild(tr);
   });
 }
 
+/* Chains (shared renderer used by main + deployments) */
 function renderChainsMain(rows){ CARD_DATA_MAIN={}; renderChainsInto(rows,'chains',CARD_DATA_MAIN); }
 function renderChainsInto(rows, containerId, mapStore){
   const el=document.getElementById(containerId); if(!el) return; el.innerHTML='';
@@ -88,17 +165,31 @@ function renderChainsInto(rows, containerId, mapStore){
   const maxH=(containerId==='chains') ? (document.getElementById('chainsMaxH')?.value||420) : (document.getElementById('depMaxH')?.value||420);
   const zoom=(containerId==='chains') ? (parseInt(document.getElementById('chainsZoom')?.value||'100',10))/100 : (parseInt(document.getElementById('depZoom')?.value||'100',10))/100;
 
-  const groups={}; rows.forEach(r=>{ const key=byF?r.foundation:(r.foundation+'::'+r.cert_name); (groups[key]=groups[key]||[]).push(r); });
-  const keys=Object.keys(groups).sort(); if(keys.length===0){ const card=document.createElement('div'); card.className='card'; card.innerHTML='<strong>No chains to display</strong>'; el.appendChild(card); return; }
+  const groups={};
+  rows.forEach(r=>{ const key=byF?r.foundation:(r.foundation+'::'+r.cert_name); (groups[key]=groups[key]||[]).push(r); });
+  const keys=Object.keys(groups).sort();
+  if(keys.length===0){ const card=document.createElement('div'); card.className='card'; card.innerHTML='<strong>No chains to display</strong>'; el.appendChild(card); return; }
 
-  let idx=0; keys.forEach(key=>{
+  let idx=0;
+  keys.forEach(key=>{
     const [foundation,...rest]=key.split('::'); const cert=byF?'(all certificates)':rest.join('::');
     const gr=groups[key].slice(); const byVid={}; gr.forEach(x=>byVid[x.version_id]=x);
 
-    function depth(n,guard=0){ if(!n) return 0; if(!n.issuer_version) return n.certificate_authority?1:99; if(guard>64) return 99;
-      const p=byVid[n.issuer_version]; if(!p) return n.certificate_authority?2:99; const root=(p.certificate_authority && !p.issuer_version);
-      const base=root?1:depth(p,guard+1); return base+1; }
-    function trace(n){ const out=[]; let cur=n,guard=0; while(cur && guard<64){ out.push(`${cur.cert_name}(${cur.version_id_short})`); if(!cur.issuer_version) break; cur=byVid[cur.issuer_version]; guard++; } return out.reverse().join(' -> '); }
+    function depth(n,guard=0){
+      if(!n) return 0;
+      if(!n.issuer_version) return n.certificate_authority?1:99;
+      if(guard>64) return 99;
+      const p=byVid[n.issuer_version];
+      if(!p) return n.certificate_authority?2:99;
+      const root=(p.certificate_authority && !p.issuer_version);
+      const base=root?1:depth(p,guard+1);
+      return base+1;
+    }
+    function trace(n){
+      const out=[]; let cur=n,guard=0;
+      while(cur && guard<64){ out.push(`${cur.cert_name}(${cur.version_id_short})`); if(!cur.issuer_version) break; cur=byVid[cur.issuer_version]; guard++; }
+      return out.reverse().join(' -> ');
+    }
     gr.forEach(n=>{ n.__depth=depth(n); n.__parent=n.issuer_version?byVid[n.issuer_version]:null; n.__trace=trace(n); });
 
     const roots=gr.filter(n=>n.certificate_authority && !n.issuer_version);
@@ -109,7 +200,8 @@ function renderChainsInto(rows, containerId, mapStore){
     const interDepths=Object.keys(interLevels).map(k=>parseInt(k,10)); const maxInterDepth=interDepths.length?Math.max(...interDepths):0;
     mapStore[idx]={roots,transCAs,interLevels,maxInterDepth,leaves};
 
-    const card=document.createElement('div'); card.className='card'; card.innerHTML=`
+    const card=document.createElement('div'); card.className='card';
+    card.innerHTML=`
       <div style="display:flex; align-items:center; gap:12px; margin-bottom:6px; flex-wrap:wrap;">
         <div><strong>${foundation} / ${cert}</strong><br><span class="muted">ROOT → TRANSITIONAL → INTERMEDIATE d1..dn → LEAF</span></div>
         <span style="margin-left:auto;" class="muted">Sort: 
@@ -124,10 +216,14 @@ function renderChainsInto(rows, containerId, mapStore){
         <div class="chain-canvas" style="transform: scale(${zoom}); transform-origin: top left;"></div>
       </div>`;
     el.appendChild(card);
-    (containerId==='chains' ? resortCard : resortDepCard)(idx,'urgency',mapStore,containerId); idx++;
+    (containerId==='chains' ? resortCard : resortDepCard)(idx,'urgency',mapStore,containerId);
+    idx++;
   });
 }
-function chipHTML(n){ const b=toBucket(n.days_remaining), color=COLORS[b]; const badges=[n.certificate_authority?'CA':'', n.transitional?'T':'', n.active?'ACTIVE':''].filter(Boolean).map(b=>`<span class="badge">${b}</span>`).join('');
+
+function chipHTML(n){
+  const bucket=toBucket(n.days_remaining), color=COLORS[bucket];
+  const badges=[n.certificate_authority?'CA':'', n.transitional?'T':'', n.active?'ACTIVE':''].filter(Boolean).map(b=>`<span class="badge">${b}</span>`).join('');
   const viol=n.__parent && (n.days_remaining??1e9) < (n.__parent.days_remaining??1e9);
   const t=`${n.cert_name} / ${n.version_id}
 valid_until: ${n.valid_until || n.valid_until_raw || ''}
@@ -137,49 +233,87 @@ issuer_chain: ${n.__trace}`;
     <div class="line1"><strong>${n.version_id_short}</strong><span class="sla" style="background:${color}"></span></div>
     <div class="line2"><span>${n.days_remaining??'NA'}d</span><span>${n.valid_until || n.valid_until_raw || ''}</span></div>
     <div class="line2"><span>${n.issuer_version_short?('issuer '+n.issuer_version_short):''} ${n.__depth?('d'+n.__depth):''}</span><div class="badges">${badges}</div></div>
-  </div>`; }
-function sortFns(mode){ const byUrg=(a,b)=>(a.days_remaining??9e9)-(b.days_remaining??9e9) || (a.version_id_short||'').localeCompare(b.version_id_short||''); const byName=(a,b)=>(a.version_id_short||'').localeCompare(b.version_id_short||''); const byDepth=(a,b)=>(a.__depth||99)-(b.__depth||99) || byUrg(a,b); return mode==='name'?byName:(mode==='depth'?byDepth:byUrg); }
-function resortCard(idx, mode, MAP=CARD_DATA_MAIN, containerId='chains'){ const data=MAP[idx]; if(!data) return;
-  const {roots,transCAs,interLevels,maxInterDepth,leaves}=data; const sortFn=sortFns(mode);
-  const cardEls=document.querySelectorAll(`#${containerId} .card`); const cardEl=cardEls[idx]; const canvas=cardEl.querySelector('.chain-canvas'); canvas.innerHTML='';
-  function tier(title, arr){ const div=document.createElement('div'); div.className='tier'; div.innerHTML=`<h5>${title}</h5><div class="chips"></div>`; const grid=div.querySelector('.chips'); arr.slice().sort(sortFn).forEach(n=>grid.insertAdjacentHTML('beforeend', chipHTML(n))); canvas.appendChild(div); }
-  tier('ROOT CAs',roots); tier('TRANSITIONAL CAs',transCAs); for(let d=1; d<=maxInterDepth; d++) tier('INTERMEDIATE d'+d, (interLevels[d]||[])); tier('LEAVES',leaves);
+  </div>`;
+}
+function sortFns(mode){
+  const byUrg=(a,b)=>(a.days_remaining??9e9)-(b.days_remaining??9e9) || (a.version_id_short||'').localeCompare(b.version_id_short||'');
+  const byName=(a,b)=>(a.version_id_short||'').localeCompare(b.version_id_short||'');
+  const byDepth=(a,b)=>(a.__depth||99)-(b.__depth||99) || byUrg(a,b);
+  return mode==='name'?byName:(mode==='depth'?byDepth:byUrg);
+}
+function resortCard(idx, mode, MAP=CARD_DATA_MAIN, containerId='chains'){
+  const data=MAP[idx]; if(!data) return;
+  const {roots,transCAs,interLevels,maxInterDepth,leaves}=data;
+  const sortFn=sortFns(mode);
+  const cardEls=document.querySelectorAll(`#${containerId} .card`); const cardEl=cardEls[idx];
+  const canvas=cardEl.querySelector('.chain-canvas'); canvas.innerHTML='';
+  function tier(title, arr){
+    const div=document.createElement('div'); div.className='tier'; div.innerHTML=`<h5>${title}</h5><div class="chips"></div>`;
+    const grid=div.querySelector('.chips'); arr.slice().sort(sortFn).forEach(n=>grid.insertAdjacentHTML('beforeend', chipHTML(n))); canvas.appendChild(div);
+  }
+  tier('ROOT CAs',roots); tier('TRANSITIONAL CAs',transCAs);
+  for(let d=1; d<=maxInterDepth; d++) tier('INTERMEDIATE d'+d, (interLevels[d]||[]));
+  tier('LEAVES',leaves);
 }
 window.resortCard=(i,m)=>resortCard(i,m,CARD_DATA_MAIN,'chains');
 function resortDepCard(idx, mode, MAP=CARD_DATA_DEP, containerId='deployChains'){ return resortCard(idx,mode,MAP,containerId); }
 window.resortDepCard=(i,m)=>resortDepCard(i,m,CARD_DATA_DEP,'deployChains');
 
-function renderInsights(rows){ const root=document.getElementById('insights'); if(!root) return; root.innerHTML=''; const group=document.getElementById('groupHeatByFoundation')?.checked===true;
+/* Insights — compact monthly panels */
+function renderInsights(rows){
+  const root=document.getElementById('insights'); if(!root) return; root.innerHTML='';
+  const group=document.getElementById('groupHeatByFoundation')?.checked===true;
   const events=rows.map(r=>({d:(r.valid_until||r.valid_until_raw||'').slice(0,10), f:r.foundation, c:r.cert_name, v:r.version_id_short})).filter(e=>e.d);
   if(!events.length){ const c=document.createElement('div'); c.className='card'; c.innerHTML='<div class="muted">No valid expiration dates in scope.</div>'; root.appendChild(c); return; }
-  const byF={}; events.forEach(e=> (byF[e.f]=byF[e.f]||[]).push(e)); const sets = group ? Object.entries(byF) : [['All Foundations', events]];
-  sets.forEach(([title,evs])=>{ const m=new Map(); evs.forEach(e=>{const wk=startOfWeek(e.d); m.set(wk,(m.get(wk)||0)+1);}); const min=[...m.keys()].sort()[0]; const months=buildMonthList(min);
-    const wrap=document.createElement('div'); wrap.className='card'; wrap.innerHTML=`<h4 style="margin:0 0 6px 0;">Rotation Splash — ${title}</h4><div class="grid"></div>`; const grid=wrap.querySelector('.grid');
-    months.forEach(mon=>{ const weeks=listWeeks(mon); const counts=weeks.map(w=>m.get(w)||0); const max=Math.max(1,...counts);
-      const cell=12,gap=2,padL=26,padT=18; const cols=weeks.length, vbW=padL+cols*(cell+gap)+8, vbH=padT+7*(cell+gap)+12; let svg=`<svg viewBox="0 0 ${vbW} ${vbH}" width="100%" height="${vbH}" xmlns="http://www.w3.org/2000/svg">`;
-      const dnames=['M','T','W','T','F','S','S']; for(let r=0;r<7;r++) svg+=`<text x="6" y="${padT + r*(cell+gap) + cell - 2}" font-size="9" fill="#94a3b8">${dnames[r]}</text>`;
+  const byF={}; events.forEach(e=> (byF[e.f]=byF[e.f]||[]).push(e));
+  const sets = group ? Object.entries(byF) : [['All Foundations', events]];
+  sets.forEach(([title,evs])=>{
+    const m=new Map(); evs.forEach(e=>{const wk=startOfWeek(e.d); m.set(wk,(m.get(wk)||0)+1);});
+    const min=[...m.keys()].sort()[0]; const months=buildMonthList(min);
+    const wrap=document.createElement('div'); wrap.className='card'; wrap.innerHTML=`<h4 style="margin:0 0 6px 0;">Rotation Splash — ${title}</h4><div class="grid"></div>`;
+    const grid=wrap.querySelector('.grid');
+    months.forEach(mon=>{
+      const weeks=listWeeks(mon); const counts=weeks.map(w=>m.get(w)||0); const max=Math.max(1,...counts);
+      const cell=12,gap=2,padL=26,padT=18; const cols=weeks.length, vbW=padL+cols*(cell+gap)+8, vbH=padT+7*(cell+gap)+12;
+      let svg=`<svg viewBox="0 0 ${vbW} ${vbH}" width="100%" height="${vbH}" xmlns="http://www.w3.org/2000/svg">`;
+      const dnames=['M','T','W','T','F','S','S'];
+      for(let r=0;r<7;r++) svg+=`<text x="6" y="${padT + r*(cell+gap) + cell - 2}" font-size="9" fill="#94a3b8">${dnames[r]}</text>`;
       weeks.forEach((wk,c)=>{ for(let r=0;r<7;r++){ const k=fmt(addDays(parseDate(wk),r)); const val=m.get(startOfWeek(k))||0; const t=val/max; const a=0.25+0.75*t; const x=padL+c*(cell+gap), y=padT+r*(cell+gap); svg+=`<rect x="${x}" y="${y}" width="${cell}" height="${cell}" fill="rgba(22,163,74,${a})"><title>${k}\n${val} expiration(s)</title></rect>`; } });
-      svg+='</svg>'; const mini=document.createElement('div'); mini.className='chip'; mini.innerHTML=`<strong>${mon}</strong>${svg}`; grid.appendChild(mini);
-    }); root.appendChild(wrap);
+      svg+='</svg>';
+      const mini=document.createElement('div'); mini.className='chip'; mini.innerHTML=`<strong>${mon}</strong>${svg}`; grid.appendChild(mini);
+    });
+    root.appendChild(wrap);
   });
-  function parseDate(s){ return new Date(s+'T00:00:00'); } function fmt(d){ return d.toISOString().slice(0,10); }
+
+  function parseDate(s){ return new Date(s+'T00:00:00'); }
+  function fmt(d){ return d.toISOString().slice(0,10); }
   function addDays(d,n){ const x=new Date(d); x.setDate(x.getDate()+n); return x; }
   function startOfWeek(s){ const d=parseDate(s); const day=d.getDay(); const diff=(day+6)%7; d.setDate(d.getDate()-diff); return fmt(d); }
   function buildMonthList(start){ const arr=[]; const d=new Date(start+'T00:00:00'); const now=new Date(); now.setMonth(now.getMonth()+12); for(let x=new Date(d.getFullYear(),d.getMonth(),1); x<=now; x=new Date(x.getFullYear(),x.getMonth()+1,1)) arr.push(x.toLocaleString(undefined,{month:'long',year:'numeric'})); return arr; }
   function listWeeks(monLabel){ const [m,y]=monLabel.split(' '); const temp=new Date(`${m} 1, ${y}`); const weeks=[]; for(let d=new Date(temp); d.getMonth()===temp.getMonth() || (d.getDay()!==1); d=new Date(d.getFullYear(),d.getMonth(),d.getDate()+7)) weeks.push(fmt(startOfWeek(fmt(d)))); return weeks; }
 }
 
-function renderDeployments(){ const cont=document.getElementById('deployChains'); if(!cont) return; const help=document.getElementById('deployHelp'); cont.innerHTML=''; if(help) help.style.display='none';
+/* Deployments */
+function renderDeployments(){
+  const cont=document.getElementById('deployChains'); if(!cont) return;
+  const help=document.getElementById('deployHelp'); cont.innerHTML=''; if(help) help.style.display='none';
   const q=(document.getElementById('depQuery')?.value || '').trim(); const exact=document.getElementById('depExact')?.checked===true;
-  if(!q){ const freq=new Map(); RAW_ROWS.forEach(r=>{ const list=(r.deployments_list&&Array.isArray(r.deployments_list))?r.deployments_list:String(r.deployments||'').split(/[,;]\s*/); list.forEach(x=>{const v=(x||'').trim(); if(v) freq.set(v,(freq.get(v)||0)+1);}); });
-    const top=[...freq.entries()].sort((a,b)=>b[1]-a[1]).slice(0,30); const rows = top.map(([n,c])=>`<tr><td>${n}</td><td style="text-align:right;">${c}</td></tr>`).join('') || '<tr><td colspan="2" class="muted">No deployments detected.</td></tr>';
+  if(!q){
+    const freq=new Map();
+    RAW_ROWS.forEach(r=>{ const list=(r.deployments_list&&Array.isArray(r.deployments_list))?r.deployments_list:String(r.deployments||'').split(/[,;]\s*/); list.forEach(x=>{const v=(x||'').trim(); if(v) freq.set(v,(freq.get(v)||0)+1);}); });
+    const top=[...freq.entries()].sort((a,b)=>b[1]-a[1]).slice(0,30);
+    const rows = top.map(([n,c])=>`<tr><td>${n}</td><td style="text-align:right;">${c}</td></tr>`).join('') || '<tr><td colspan="2" class="muted">No deployments detected.</td></tr>';
     if(help){ help.style.display='block'; help.innerHTML = `<strong>Type a deployment_name to see correlated chains.</strong>
       <div class="muted" style="margin:6px 0 10px 0;">Parsed from uploaded Maestro files.</div>
       <table style="width:100%; border-collapse:collapse;">
         <thead><tr><th>Top deployment_name</th><th style="text-align:right;">Refs</th></tr></thead><tbody>${rows}</tbody></table>`; }
-    return; }
-  const qlc=q.toLowerCase(); const matched = RAW_ROWS.filter(r=>{ const list=(r.deployments_list&&Array.isArray(r.deployments_list))?r.deployments_list:String(r.deployments||'').split(/[,;]\s*/);
-    return list.some(x=>{ const v=(x||'').trim(); if(!v) return false; return exact? v===q : v.toLowerCase().includes(qlc); }); });
+    return;
+  }
+  const qlc=q.toLowerCase();
+  const matched = RAW_ROWS.filter(r=>{
+    const list=(r.deployments_list&&Array.isArray(r.deployments_list))?r.deployments_list:String(r.deployments||'').split(/[,;]\s*/);
+    return list.some(x=>{ const v=(x||'').trim(); if(!v) return false; return exact? v===q : v.toLowerCase().includes(qlc); });
+  });
   if(!matched.length){ const card=document.createElement('div'); card.className='card'; card.innerHTML=`<div class="muted">No matches for <code>${q}</code>.</div>`; cont.appendChild(card); return; }
   CARD_DATA_DEP={}; renderChainsInto(matched,'deployChains',CARD_DATA_DEP);
 }

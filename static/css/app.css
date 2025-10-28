@@ -1,5 +1,6 @@
 :root{
-  --bg:#0b1220; --card:#0f172a; --soft:#111827; --text:#e5e7eb; --muted:#94a3b8; --border:#1f2937;
+  --bg:#0b1220; --card:#0f172a; --soft:#111827; --text:#e5e7eb; --muted:#94a3b8; --accent:#60a5fa; --border:#1f2937;
+  --cols: auto-fit; /* dynamic grid columns (set via JS) */
 }
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
@@ -24,7 +25,8 @@ h1{font-size:18px;margin:0}
 table{border-collapse:collapse;width:100%}
 th,td{border-top:1px solid var(--border);padding:8px 10px;text-align:left;vertical-align:top}
 thead th{position:sticky;top:0;background:#0b1325}
-.grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(420px,1fr))}
+.grid{display:grid;gap:12px;grid-template-columns:repeat(var(--cols), minmax(380px, 1fr))}
+/* dynamic cap at 4 cols by container width is handled in JS by setting --cols to 1..4 */
 .chain-viewport{overflow:auto;border:1px solid var(--border);border-radius:8px;padding:8px;background:#0b1325}
 .tier{margin:6px 0 12px 0}.tier h5{margin:0 0 6px 0;color:var(--muted);font-size:13px}
 .chips{display:grid;gap:8px;grid-template-columns:repeat(auto-fit,minmax(180px,1fr))}

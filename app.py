@@ -11,20 +11,25 @@ SIG: str = ""
 
 def _parse_dt(s: Optional[str]):
     if not s: return None
-    s=str(s).strip().replace(' ', 'T')
-    if s.endswith('Z'): s=s[:-1]+'+00:00'
-    try: return dt.datetime.fromisoformat(s)
-    except Exception: return None
+    s = str(s).strip().replace(' ', 'T')
+    if s.endswith('Z'):
+        s = s[:-1] + '+00:00'
+    try:
+        return dt.datetime.fromisoformat(s)
+    except Exception:
+        return None
 
 def _days_left(d):
-    if not d: return None
-    if d.tzinfo is None: d = d.replace(tzinfo=dt.timezone.utc)
+    if not d:
+        return None
+    if d.tzinfo is None:
+        d = d.replace(tzinfo=dt.timezone.utc)
     now = dt.datetime.now(dt.timezone.utc)
-    return (d-now).days
+    return (d - now).days
 
-def _short(s): 
+def _short(s: Optional[str]) -> str:
     if not s: return ""
-    return s[:8]+"..." if len(s)>9 else s
+    return (s[:8] + "...") if len(s) > 9 else s
 
 def flatten(doc, foundation):
     topo = (doc or {}).get("output", {}).get("topology", [])
@@ -32,7 +37,8 @@ def flatten(doc, foundation):
     for c in topo:
         for v in (c.get("versions") or []):
             vid = v.get("version_id")
-            if vid: name_by_vid[vid] = c.get("name") or "UNKNOWN_CERT"
+            if vid:
+                name_by_vid[vid] = c.get("name") or "UNKNOWN_CERT"
     rows = []
     for c in topo:
         cname = c.get("name") or "UNKNOWN_CERT"
@@ -68,8 +74,8 @@ def flatten(doc, foundation):
 
 def _sig(files):
     h = hashlib.sha256()
-    for n,data in files:
-        h.update(n.encode()+b"\x00"+data)
+    for n, data in files:
+        h.update(n.encode() + b"\x00" + data)
     return h.hexdigest()
 
 @app.route("/")
@@ -80,7 +86,8 @@ def index():
 def upload():
     global ROWS, SIG
     fobjs = request.files.getlist("files")
-    if not fobjs: return jsonify({"ok":False,"error":"no files"}), 400
+    if not fobjs:
+        return jsonify({"ok": False, "error": "no files"}), 400
     rows = []
     pairs = []
     for f in fobjs:
@@ -89,12 +96,12 @@ def upload():
         try:
             doc = yaml.safe_load(raw.decode("utf-8", errors="replace"))
         except Exception as e:
-            return jsonify({"ok":False,"error":f"parse error {f.filename}: {e}"}), 400
+            return jsonify({"ok": False, "error": f"parse error {f.filename}: {e}"}), 400
         foundation = os.path.splitext(os.path.basename(f.filename))[0]
         rows.extend(flatten(doc, foundation))
     ROWS = rows
     SIG = _sig(pairs)
-    return jsonify({"ok":True,"rows":len(ROWS),"sig":SIG})
+    return jsonify({"ok": True, "rows": len(ROWS), "sig": SIG})
 
 @app.route("/api/rows")
 def rows():
@@ -106,7 +113,9 @@ def export_csv():
     out.write("foundation,cert_name,version_id_short,issuer,active,certificate_authority,transitional,deployments,valid_until,days_remaining\n")
     for r in ROWS:
         out.write(",".join([
-            r["foundation"], r["cert_name"], r["version_id_short"],
+            r["foundation"],
+            r["cert_name"],
+            r["version_id_short"],
             (r.get("issuer") or "").replace(",", ";"),
             "true" if r["active"] else "false",
             "true" if r["certificate_authority"] else "false",
@@ -114,9 +123,9 @@ def export_csv():
             (r.get("deployments") or "").replace(",", ";"),
             r.get("valid_until") or "",
             str(r.get("days_remaining") or ""),
-        ])+"\n")
+        ]) + "\n")
     return Response(out.getvalue(), mimetype="text/csv",
-                    headers={"Content-Disposition":"attachment; filename=cert_rotation_plan.csv"})
+                    headers={"Content-Disposition": "attachment; filename=cert_rotation_plan.csv"})
 
 @app.route("/api/export/json")
 def export_json():
@@ -124,7 +133,7 @@ def export_json():
 
 @app.route("/api/runbook")
 def runbook():
-    def md(s): return (s or "").replace("|","\\|")
+    def md(s): return (s or "").replace("|", "\|")
     out = io.StringIO()
     out.write("# Certificate Rotation Runbook\n\n")
     cas = [r for r in ROWS if r["certificate_authority"]]
@@ -138,7 +147,7 @@ def runbook():
     for r in leaves:
         out.write(f"- {md(r['foundation'])} / {md(r['cert_name'])} `{r['version_id_short']}` — {r['days_remaining']}d (issuer: {md(r.get('issuer',''))})\n")
     return Response(out.getvalue(), mimetype="text/markdown",
-                    headers={"Content-Disposition":"attachment; filename=Runbook.md"})
+                    headers={"Content-Disposition": "attachment; filename=Runbook.md"})
 
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=int(os.environ.get("PORT","5000")), debug=True)
+    app.run(host="127.0.0.1", port=int(os.environ.get("PORT", "5000")), debug=True)
