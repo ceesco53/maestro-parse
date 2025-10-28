@@ -131,15 +131,15 @@ function wireTabs(){
 }
 
 function wireButtons(){
-  const clr=document.getElementById('btnClearHL');
-  if(clr) clr.addEventListener('click', clearHighlight);
+  const $=id=>document.getElementById(id);
+  const clr=$('btnClearHL'); if(clr) clr.addEventListener('click', clearHighlight);
   document.addEventListener('keydown', (e)=>{ if(e.key==='Escape') clearHighlight(); });
 
   const $=id=>document.getElementById(id);
-  $('btnClear').addEventListener('click', ()=>{ RAW_ROWS=[]; renderAll(); setStatus('Cleared'); });
-  $('btnCSV').addEventListener('click', ()=> window.open('/api/export/csv','_blank'));
-  $('btnJSON').addEventListener('click', ()=> window.open('/api/export/json','_blank'));
-  $('btnRunbook').addEventListener('click', ()=> window.open('/api/runbook','_blank'));
+  document.getElementById('btnClear').addEventListener('click', ()=>{ RAW_ROWS=[]; renderAll(); setStatus('Cleared'); });
+  document.getElementById('btnCSV').addEventListener('click', ()=> window.open('/api/export/csv','_blank'));
+  document.getElementById('btnJSON').addEventListener('click', ()=> window.open('/api/export/json','_blank'));
+  document.getElementById('btnRunbook').addEventListener('click', ()=> window.open('/api/runbook','_blank'));
 }
 
 function refreshRows(){ fetch('/api/rows').then(r=>r.json()).then(rows=>{ RAW_ROWS=rows; populateFoundationSelect(); populateDeploymentDatalist(); renderAll(); }).catch(e=>showError(e.message)); }
@@ -414,22 +414,24 @@ function renderDeployments(){
   const cont=document.getElementById('deployChains'); if(!cont) return;
   const help=document.getElementById('deployHelp'); cont.innerHTML=''; if(help) help.style.display='none';
   const q=(document.getElementById('depQuery')?.value || '').trim(); const exact=document.getElementById('depExact')?.checked===true;
+  // Use globally filtered set as the base
+  const base = filteredRows();
   if(!q){
     const freq=new Map();
-    RAW_ROWS.forEach(r=>{ const list=(r.deployments_list&&Array.isArray(r.deployments_list))?r.deployments_list:String(r.deployments||'').split(/[,;]\s*/); list.forEach(x=>{const v=(x||'').trim(); if(v) freq.set(v,(freq.get(v)||0)+1);}); });
+    base.forEach(r=>{ const list=(r.deployments_list&&Array.isArray(r.deployments_list))?r.deployments_list:String(r.deployments||'').split(/[,;]\s*/); list.forEach(x=>{const v=(x||'').trim(); if(v) freq.set(v,(freq.get(v)||0)+1);}); });
     const top=[...freq.entries()].sort((a,b)=>b[1]-a[1]).slice(0,30);
-    const rows = top.map(([n,c])=>`<tr><td>${n}</td><td style="text-align:right;">${c}</td></tr>`).join('') || '<tr><td colspan="2" class="muted">No deployments detected.</td></tr>';
+    const rows = top.map(([n,c])=>`<tr><td>${n}</td><td style="text-align:right;">${c}</td></tr>`).join('') || '<tr><td colspan="2" class="muted">No deployments detected in current filter.</td></tr>';
     if(help){ help.style.display='block'; help.innerHTML = `<strong>Type a deployment_name to see correlated chains.</strong>
-      <div class="muted" style="margin:6px 0 10px 0;">Parsed from uploaded Maestro files.</div>
+      <div class="muted" style="margin:6px 0 10px 0;">Scope respects global filters (foundation/SLA/CA/Transitional/Active).</div>
       <table style="width:100%; border-collapse:collapse;">
         <thead><tr><th>Top deployment_name</th><th style="text-align:right;">Refs</th></tr></thead><tbody>${rows}</tbody></table>`; }
     return;
   }
   const qlc=q.toLowerCase();
-  const matched = RAW_ROWS.filter(r=>{
+  const matched = base.filter(r=>{
     const list=(r.deployments_list&&Array.isArray(r.deployments_list))?r.deployments_list:String(r.deployments||'').split(/[,;]\s*/);
     return list.some(x=>{ const v=(x||'').trim(); if(!v) return false; return exact? v===q : v.toLowerCase().includes(qlc); });
   });
-  if(!matched.length){ const card=document.createElement('div'); card.className='card'; card.innerHTML=`<div class="muted">No matches for <code>${q}</code>.</div>`; cont.appendChild(card); return; }
+  if(!matched.length){ const card=document.createElement('div'); card.className='card'; card.innerHTML=`<div class="muted">No matches for <code>${q}</code> in current filter.</div>`; cont.appendChild(card); return; }
   CARD_DATA_DEP={}; renderChainsInto(matched,'deployChains',CARD_DATA_DEP);
 }
