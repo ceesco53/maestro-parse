@@ -479,7 +479,7 @@ function renderInsights(rows){
       hasSelected = [...SELECTED.chain].some(v=>vids.has(v));
     }
 
-    const m=new Map(); evs.forEach(e=>{const wk=startOfWeek(e.d); m.set(wk,(m.get(wk)||0)+1);});
+    const m=new Map(); evs.forEach(e=>{const wk=startOfWeekStr(e.d); m.set(wk,(m.get(wk)||0)+1);});
     const min=[...m.keys()].sort()[0]; const months=buildMonthList(min);
     const wrap=document.createElement('div'); wrap.className='card'; wrap.innerHTML=`<h4 style="margin:0 0 6px 0;">Rotation Splash — ${title}</h4><div class="grid"></div>`;
     const grid=wrap.querySelector('.grid');
@@ -489,7 +489,7 @@ function renderInsights(rows){
       let svg=`<svg viewBox="0 0 ${vbW} ${vbH}" width="100%" height="${vbH}" xmlns="http://www.w3.org/2000/svg">`;
       const dnames=['M','T','W','T','F','S','S'];
       for(let r=0;r<7;r++) svg+=`<text x="6" y="${padT + r*(cell+gap) + cell - 2}" font-size="9" fill="#94a3b8">${dnames[r]}</text>`;
-      weeks.forEach((wk,c)=>{ for(let r=0;r<7;r++){ const k=fmt(addDays(parseDate(wk),r)); const val=m.get(startOfWeek(k))||0; const t=val/max; const a=0.25+0.75*t; const x=padL+c*(cell+gap), y=padT+r*(cell+gap); svg+=`<rect x="${x}" y="${y}" width="${cell}" height="${cell}" fill="rgba(22,163,74,${a})"><title>${k}\n${val} expiration(s)</title></rect>`; } });
+      weeks.forEach((wk,c)=>{ for(let r=0;r<7;r++){ const k=fmt(addDays(parseDate(wk),r)); const val=m.get(startOfWeekStr(k))||0; const t=val/max; const a=0.25+0.75*t; const x=padL+c*(cell+gap), y=padT+r*(cell+gap); svg+=`<rect x="${x}" y="${y}" width="${cell}" height="${cell}" fill="rgba(22,163,74,${a})"><title>${k}\n${val} expiration(s)</title></rect>`; } });
       svg+='</svg>';
       const mini=document.createElement('div'); mini.className='chip'; mini.innerHTML=`<strong>${mon}</strong>${svg}`; if(!hasSelected){ mini.classList.add('dimmed'); } grid.appendChild(mini);
     });
