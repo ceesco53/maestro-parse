@@ -196,6 +196,17 @@ function wireTabs(){
     });
 }
 
+function toggleDebug(){
+  try {
+    document.body.classList.toggle('debug-open');
+    const el = document.getElementById('debugLog');
+    if (el && window.__DBG && Array.isArray(__DBG.logs)){
+      el.textContent = __DBG.logs.map(l=>`[${l.time}] ${l.kind}: ${l.msg}${l.meta && l.meta.where?` (at ${l.meta.where})`:''}`).join('\n');
+    }
+  } catch(e){ console.error('toggleDebug error', e); }
+}
+window.toggleDebug = toggleDebug;
+
 function wireButtons(){
   const clr = document.getElementById('btnClearHL');
   if (clr) clr.addEventListener('click', clearHighlight);
@@ -212,6 +223,9 @@ function wireButtons(){
 
   const btnRunbook = document.getElementById('btnRunbook');
   if (btnRunbook) btnRunbook.addEventListener('click', ()=> window.open('/api/runbook','_blank'));
+
+  const btnDebug = document.getElementById('btnDebug');
+  if (btnDebug) btnDebug.addEventListener('click', toggleDebug);
 
   const btnDebug = document.getElementById('btnDebug');
   if (btnDebug) btnDebug.addEventListener('click', ()=>{ document.body.classList.toggle('debug-open'); const el=document.getElementById('debugLog'); if(el){ el.textContent = (__DBG.logs||[]).map(l=>`[${l.time}] ${l.kind}: ${l.msg}${l.meta && l.meta.where?` (at ${l.meta.where})`:''}`).join('\n'); } });
