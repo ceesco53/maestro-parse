@@ -135,7 +135,6 @@ function wireButtons(){
   const clr=$('btnClearHL'); if(clr) clr.addEventListener('click', clearHighlight);
   document.addEventListener('keydown', (e)=>{ if(e.key==='Escape') clearHighlight(); });
 
-  const $=id=>document.getElementById(id);
   document.getElementById('btnClear').addEventListener('click', ()=>{ RAW_ROWS=[]; renderAll(); setStatus('Cleared'); });
   document.getElementById('btnCSV').addEventListener('click', ()=> window.open('/api/export/csv','_blank'));
   document.getElementById('btnJSON').addEventListener('click', ()=> window.open('/api/export/json','_blank'));
