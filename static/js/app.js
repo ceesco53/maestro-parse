@@ -73,8 +73,13 @@ function init(){
   window.addEventListener('resize', applyDynamicCols);
 }
 
+let __colsReq = null;
 function applyDynamicCols(){
-  document.querySelectorAll('[data-dynamic-cols]').forEach(setGridCols);
+  if (__colsReq) return; // batch until next frame
+  __colsReq = requestAnimationFrame(()=>{
+    __colsReq = null;
+    document.querySelectorAll('[data-dynamic-cols]').forEach(setGridCols);
+  });
   function setGridCols(el){
     const width = el.clientWidth || el.parentElement?.clientWidth || window.innerWidth;
     let cols = Math.max(1, Math.min(4, Math.floor(width / 420)));
@@ -177,14 +182,18 @@ function filteredRows(){
   return data;
 }
 
+let __rendering = false;
 function renderAll(){
-  const data=filteredRows();
-  renderTimeline(data);
-  renderTable(data);
-  renderChainsMain(data);
-  renderInsights(data);
-  renderDeployments();
-  applyDynamicCols();
+  if (__rendering) return; __rendering = true;
+  try{
+    const data=filteredRows();
+    renderTimeline(data);
+    renderTable(data);
+    renderChainsMain(data);
+    renderInsights(data);
+    renderDeployments();
+    applyDynamicCols();
+  } finally { __rendering = false; }
 }
 
 /* Timeline — List cards */
@@ -401,11 +410,39 @@ function renderInsights(rows){
   });
 
   function parseDate(s){ return new Date(s+'T00:00:00'); }
-  function fmt(d){ return d.toISOString().slice(0,10); }
-  function addDays(d,n){ const x=new Date(d); x.setDate(x.getDate()+n); return x; }
-  function startOfWeek(s){ const d=parseDate(s); const day=d.getDay(); const diff=(day+6)%7; d.setDate(d.getDate()-diff); return fmt(d); }
-  function buildMonthList(start){ const arr=[]; const d=new Date(start+'T00:00:00'); const now=new Date(); now.setMonth(now.getMonth()+12); for(let x=new Date(d.getFullYear(),d.getMonth(),1); x<=now; x=new Date(x.getFullYear(),x.getMonth()+1,1)) arr.push(x.toLocaleString(undefined,{month:'long',year:'numeric'})); return arr; }
-  function listWeeks(monLabel){ const [m,y]=monLabel.split(' '); const temp=new Date(`${m} 1, ${y}`); const weeks=[]; for(let d=new Date(temp); d.getMonth()===temp.getMonth() || (d.getDay()!==1); d=new Date(d.getFullYear(),d.getMonth(),d.getDate()+7)) weeks.push(fmt(startOfWeek(fmt(d)))); return weeks; }
+function fmt(d){ return d.toISOString().slice(0,10); }
+function addDays(d,n){ const x=new Date(d.getTime()); x.setDate(x.getDate()+n); return x; }
+function startOfWeekStr(s){ const d=parseDate(s); const day=d.getDay(); const diff=(day+6)%7; d.setDate(d.getDate()-diff); return fmt(d); }
+function startOfWeekDate(d){ const x=new Date(d.getTime()); const day=x.getDay(); const diff=(day+6)%7; x.setDate(x.getDate()-diff); return x; }
+function buildMonthList(start){
+  const arr=[]; if(!start) return arr; const d=parseDate(start);
+  if(Number.isNaN(d.getTime())) return arr; const now=new Date(); now.setMonth(now.getMonth()+12);
+  for(let x=new Date(d.getFullYear(), d.getMonth(), 1); x<=now; x=new Date(x.getFullYear(), x.getMonth()+1, 1)){
+    arr.push(x.toLocaleString(undefined,{month:'long',year:'numeric'}));
+  }
+  return arr;
+}
+function listWeeks(monLabel){
+  const parts = monLabel.split(' ');
+  if (parts.length<2) return [];
+  const m = parts[0], y = parseInt(parts[1],10);
+  if(!y || Number.isNaN(y)) return [];
+  const firstOfMonth = new Date(`${m} 1, ${y}`);
+  if(Number.isNaN(firstOfMonth.getTime())) return [];
+  const lastOfMonth = new Date(firstOfMonth.getFullYear(), firstOfMonth.getMonth()+1, 0);
+  // find Monday on or before firstOfMonth
+  let cur = startOfWeekDate(firstOfMonth);
+  const out = [];
+  // iterate Mondays until we pass lastOfMonth + 6 days (to cover final week)
+  const end = addDays(lastOfMonth, 6);
+  let guard = 0;
+  while (cur <= end && guard < 12){
+    out.push(fmt(cur));
+    cur = addDays(cur, 7);
+    guard++;
+  }
+  return out;
+}
 }
 
 /* Deployments */
