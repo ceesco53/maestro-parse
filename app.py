@@ -1,156 +1,158 @@
-#!/usr/bin/env python3
-import io, os, hashlib, datetime as dt
-from typing import Any, Dict, List, Optional
-from flask import Flask, request, jsonify, render_template, Response
-import yaml
 
-app = Flask(__name__, static_folder="static", template_folder="templates")
+from flask import Flask, render_template, request, jsonify, send_file
+from dateutil import parser as dtp
+from datetime import datetime, timezone
+import io, csv, json
 
-ROWS: List[Dict[str, Any]] = []
-SIG: str = ""
+app = Flask(__name__)
 
-def _parse_dt(s: Optional[str]):
-    if not s: return None
-    s = str(s).strip().replace(' ', 'T')
-    if s.endswith('Z'):
-        s = s[:-1] + '+00:00'
+RAW = []  # normalized rows across uploads
+
+def parse_iso(s):
+    if not s:
+        return None
     try:
-        return dt.datetime.fromisoformat(s)
+        return dtp.isoparse(s)
     except Exception:
         return None
 
-def _days_left(d):
-    if not d:
+def days_until(dt):
+    if not dt:
         return None
-    if d.tzinfo is None:
-        d = d.replace(tzinfo=dt.timezone.utc)
-    now = dt.datetime.now(dt.timezone.utc)
-    return (d - now).days
+    now = datetime.now(timezone.utc)
+    return int((dt - now).total_seconds() // 86400)
 
-def _short(s: Optional[str]) -> str:
-    if not s: return ""
-    return (s[:8] + "...") if len(s) > 9 else s
+def sla_bucket(d):
+    if d is None:
+        return "no-date"
+    if d <= 30: return "<=30"
+    if d <= 60: return "<=60"
+    if d <= 90: return "<=90"
+    return ">90"
 
-def flatten(doc, foundation):
-    topo = (doc or {}).get("output", {}).get("topology", [])
-    name_by_vid = {}
-    for c in topo:
-        for v in (c.get("versions") or []):
-            vid = v.get("version_id")
-            if vid:
-                name_by_vid[vid] = c.get("name") or "UNKNOWN_CERT"
-    rows = []
-    for c in topo:
-        cname = c.get("name") or "UNKNOWN_CERT"
-        for v in (c.get("versions") or []):
-            vu = _parse_dt(v.get("valid_until"))
-            issuer_vid = v.get("signed_by_version") or ""
-            issuer = f"{name_by_vid.get(issuer_vid, issuer_vid)}({_short(issuer_vid)})" if issuer_vid else ""
-            deployments = v.get("deployment_names")
-            if isinstance(deployments, list):
-                dep_list = deployments
-                dep_str = ", ".join(deployments)
-            else:
-                dep_str = deployments or ""
-                dep_list = [x.strip() for x in dep_str.split(",") if x.strip()]
-            rows.append({
-                "foundation": foundation,
-                "cert_name": cname,
-                "version_id": v.get("version_id") or "",
-                "version_id_short": _short(v.get("version_id") or ""),
-                "issuer_version": issuer_vid,
-                "issuer": issuer,
-                "issuer_version_short": _short(issuer_vid) if issuer_vid else "",
-                "active": bool(v.get("active")),
-                "certificate_authority": bool(v.get("certificate_authority")),
-                "transitional": bool(v.get("transitional")),
-                "deployments": dep_str,
-                "deployments_list": dep_list,
-                "valid_until": vu.isoformat() if vu else (v.get("valid_until") or ""),
-                "valid_until_raw": v.get("valid_until") or "",
-                "days_remaining": _days_left(vu),
-            })
+def walk(node, parent_name=None, root_name=None, depth=0, rows=None):
+    # C1: every nested cert becomes its own row
+    if rows is None: rows = []
+    name = node.get("name") or ""
+    is_ca = bool(node.get("is_ca"))
+    issuer = node.get("issuer") or ""
+    location = node.get("location") or ""
+    product_guid = node.get("product_guid") or ""
+    valid_from_raw = node.get("valid_from")
+    valid_until_raw = node.get("valid_until")
+    valid_from = parse_iso(valid_from_raw)
+    valid_until = parse_iso(valid_until_raw)
+    deployments = list(node.get("deployments") or [])
+    rotation_status = node.get("rotation_status") or ""
+    rotation_procedure_name = node.get("rotation_procedure_name") or ""
+    rotation_procedure_url  = node.get("rotation_procedure_url") or ""
+
+    if root_name is None:
+        root_name = name or issuer or "root"
+
+    dleft = days_until(valid_until)
+    row = {
+        "name": name,
+        "is_ca": is_ca,
+        "issuer": issuer,
+        "location": location,
+        "product_guid": product_guid,
+        "valid_from": valid_from_raw,
+        "valid_until": valid_until_raw,
+        "days_until": dleft,
+        "sla": sla_bucket(dleft),
+        "deployments": deployments,
+        "rotation_status": rotation_status,
+        "rotation_procedure_name": rotation_procedure_name,
+        "rotation_procedure_url": rotation_procedure_url,
+        "parent_name": parent_name,
+        "root_name": root_name,
+        "depth": depth
+    }
+    rows.append(row)
+
+    for child in node.get("signs") or []:
+        walk(child, parent_name=name, root_name=root_name, depth=depth+1, rows=rows)
+
     return rows
 
-def _sig(files):
-    h = hashlib.sha256()
-    for n, data in files:
-        h.update(n.encode() + b"\x00" + data)
-    return h.hexdigest()
+def normalize(json_blob):
+    rows = []
+    # accept dict or list; accept key 'certificates' or 'roots' or a single root
+    if isinstance(json_blob, dict):
+        items = json_blob.get("certificates") or json_blob.get("roots") or [json_blob]
+    elif isinstance(json_blob, list):
+        items = json_blob
+    else:
+        items = []
+
+    for item in items:
+        rows.extend(walk(item))
+
+    # sort by valid_until asc (None at end)
+    def key_fn(r):
+        vu = parse_iso(r.get("valid_until"))
+        return (1, datetime.max.replace(tzinfo=timezone.utc)) if vu is None else (0, vu)
+    rows.sort(key=key_fn)
+    return rows
 
 @app.route("/")
 def index():
     return render_template("index.html")
 
-@app.route("/api/upload", methods=["POST"])
-def upload():
-    global ROWS, SIG
-    fobjs = request.files.getlist("files")
-    if not fobjs:
-        return jsonify({"ok": False, "error": "no files"}), 400
-    rows = []
-    pairs = []
-    for f in fobjs:
-        raw = f.read()
-        pairs.append((f.filename, raw))
+@app.post("/api/upload")
+def api_upload():
+    global RAW
+    files = request.files.getlist("files")
+    new_rows = []
+    for f in files:
         try:
-            doc = yaml.safe_load(raw.decode("utf-8", errors="replace"))
+            blob = json.load(f.stream)
+            new_rows.extend(normalize(blob))
         except Exception as e:
-            return jsonify({"ok": False, "error": f"parse error {f.filename}: {e}"}), 400
-        foundation = os.path.splitext(os.path.basename(f.filename))[0]
-        rows.extend(flatten(doc, foundation))
-    ROWS = rows
-    SIG = _sig(pairs)
-    return jsonify({"ok": True, "rows": len(ROWS), "sig": SIG})
+            return jsonify({"ok": False, "error": f"Failed to parse JSON {f.filename}: {e}"}), 400
+    RAW = new_rows
+    return jsonify({"ok": True, "count": len(RAW)})
 
-@app.route("/api/rows")
-def rows():
-    return jsonify(ROWS or [])
+@app.get("/api/data")
+def api_data():
+    return jsonify({"rows": RAW})
 
-@app.route("/api/export/csv")
-def export_csv():
-    out = io.StringIO()
-    out.write("foundation,cert_name,version_id_short,issuer,active,certificate_authority,transitional,deployments,valid_until,days_remaining\n")
-    for r in ROWS:
-        out.write(",".join([
-            r["foundation"],
-            r["cert_name"],
-            r["version_id_short"],
-            (r.get("issuer") or "").replace(",", ";"),
-            "true" if r["active"] else "false",
-            "true" if r["certificate_authority"] else "false",
-            "true" if r["transitional"] else "false",
-            (r.get("deployments") or "").replace(",", ";"),
-            r.get("valid_until") or "",
-            str(r.get("days_remaining") or ""),
-        ]) + "\n")
-    return Response(out.getvalue(), mimetype="text/csv",
-                    headers={"Content-Disposition": "attachment; filename=cert_rotation_plan.csv"})
+@app.get("/api/export/csv")
+def api_export_csv():
+    si = io.StringIO()
+    w = csv.writer(si)
+    header = ["name","is_ca","issuer","location","product_guid","valid_from","valid_until","days_until","sla","deployments","rotation_status","rotation_procedure_name","rotation_procedure_url","parent_name","root_name","depth"]
+    w.writerow(header)
+    for r in RAW:
+        w.writerow([
+            r.get("name",""),
+            r.get("is_ca",False),
+            r.get("issuer",""),
+            r.get("location",""),
+            r.get("product_guid",""),
+            r.get("valid_from",""),
+            r.get("valid_until",""),
+            r.get("days_until",""),
+            r.get("sla",""),
+            ";".join(r.get("deployments") or []),
+            r.get("rotation_status",""),
+            r.get("rotation_procedure_name",""),
+            r.get("rotation_procedure_url",""),
+            r.get("parent_name",""),
+            r.get("root_name",""),
+            r.get("depth",0),
+        ])
+    mem = io.BytesIO()
+    mem.write(si.getvalue().encode("utf-8"))
+    mem.seek(0)
+    return send_file(mem, as_attachment=True, download_name="certs.csv", mimetype="text/csv")
 
-@app.route("/api/export/json")
-def export_json():
-    return jsonify(ROWS or [])
-
-@app.route("/api/runbook")
-def runbook():
-    def md(s: Optional[str]) -> str:
-        s = (s or "")
-        # Escape backslashes first, then pipes for Markdown safety
-        return s.replace("\\", "\\\\").replace("|", "\\|")
-    out = io.StringIO()
-    out.write("# Certificate Rotation Runbook\n\n")
-    cas = [r for r in ROWS if r["certificate_authority"]]
-    leaves = [r for r in ROWS if not r["certificate_authority"]]
-    cas.sort(key=lambda r: (r["days_remaining"] if r["days_remaining"] is not None else 9_000_000))
-    leaves.sort(key=lambda r: (r["days_remaining"] if r["days_remaining"] is not None else 9_000_000))
-    out.write("## Phase 1 — CAs\n")
-    for r in cas:
-        out.write(f"- **{md(r['foundation'])}** / **{md(r['cert_name'])}** `{r['version_id_short']}` — {r['days_remaining']}d (issuer: {md(r.get('issuer',''))})\n")
-    out.write("\n## Phase 2 — Leaves\n")
-    for r in leaves:
-        out.write(f"- {md(r['foundation'])} / {md(r['cert_name'])} `{r['version_id_short']}` — {r['days_remaining']}d (issuer: {md(r.get('issuer',''))})\n")
-    return Response(out.getvalue(), mimetype="text/markdown",
-                    headers={"Content-Disposition": "attachment; filename=Runbook.md"})
+@app.get("/api/export/json")
+def api_export_json():
+    mem = io.BytesIO(json.dumps(RAW, indent=2).encode("utf-8"))
+    mem.seek(0)
+    return send_file(mem, as_attachment=True, download_name="certs.json", mimetype="application/json")
 
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=int(os.environ.get("PORT", "5000")), debug=True)
+    app.run(host="127.0.0.1", port=5000, debug=True)

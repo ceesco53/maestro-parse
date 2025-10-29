@@ -1,592 +1,447 @@
+
+let ROWS = [];
+let HILITE_NAME = null;    // global soft-glow target
+let FND_MAP = {};          // exact-match mapping for p-bosh-* ids
+
 document.addEventListener('DOMContentLoaded', init);
 
-const __DBG = {
-  logs: [],
-  push(kind, msg, meta){
-    const time = new Date().toISOString();
-    const entry = {time, kind, msg: String(msg||''), meta: meta||{}};
-    this.logs.push(entry);
-    if (this.logs.length > 2000) this.logs.shift();
-    const el = document.getElementById('debugLog');
-    if (el && document.body.classList.contains('debug-open')){
-      el.textContent = this.logs.map(l=>`[${l.time}] ${l.kind}: ${l.msg}${l.meta && l.meta.where?` (at ${l.meta.where})`:''}`).join('\n');
-    }
-  }
-};
-
-(function wireGlobalErrorCapture(){
-  const banner = document.getElementById('errorBanner');
-  function show(msg){
-    if (!banner) return;
-    banner.innerHTML = msg.replace(/\n/g,'<br>');
-    banner.style.display = 'block';
-  }
-  window.addEventListener('error', (e)=>{
-    const where = (e.filename? (e.filename+':'+e.lineno+':'+e.colno): 'window.error');
-    __DBG.push('error', e.message||'Unknown error', {where});
-    show(`<strong>JS Error:</strong> ${e.message||'Unknown'}\n<small>${where}</small>`);
-  });
-  window.addEventListener('unhandledrejection', (e)=>{
-    const reason = e.reason && (e.reason.stack || e.reason.message || String(e.reason));
-    __DBG.push('unhandledrejection', reason || 'Unknown rejection');
-    show(`<strong>Unhandled Promise Rejection</strong>\n<small>${reason||''}</small>`);
-  });
-  const oldOnError = window.onerror;
-  window.onerror = function(message, source, lineno, colno, error){
-    const where = (source? (source+':'+lineno+':'+colno): 'window.onerror');
-    __DBG.push('onerror', message || (error && error.message) || 'Unknown', {where});
-    show(`<strong>onerror:</strong> ${message||''}\n<small>${where}</small>`);
-    if (oldOnError) return oldOnError.apply(this, arguments);
-    return false;
-  };
-  // Console tap
-  ['log','warn','error'].forEach(fn=>{
-    const orig = console[fn].bind(console);
-    console[fn] = (...args)=>{ try{ __DBG.push('console.'+fn, args.map(a=> (a && a.stack) ? a.stack : String(a)).join(' ')); }catch{}; return orig(...args); };
-  });
-})();
-
-// Debug button
-(function(){
-  document.addEventListener('click', (e)=>{
-    const t = e.target;
-    if (t && t.id === 'btnDebug'){
-      document.body.classList.toggle('debug-open');
-      const el = document.getElementById('debugLog');
-      if (el){ el.textContent = __DBG.logs.map(l=>`[${l.time}] ${l.kind}: ${l.msg}${l.meta && l.meta.where?` (at ${l.meta.where})`:''}`).join('\n'); }
-    }
-  });
-})();
-
-
-let SELECTED = { anchorVid: null, chain: new Set() };
-
-function clearHighlight() {
-  SELECTED.anchorVid = null;
-  SELECTED.chain = new Set();
-  renderAll();
-}
-
-function computeChainFromVid(vid){
-  // Build from RAW_ROWS within same foundation scope(s). Collect versions up and down by issuer graph.
-  const byVid = new Map();
-  RAW_ROWS.forEach(r => byVid.set(r.version_id, r));
-  const chain = new Set();
-  const q = [];
-  const start = byVid.get(vid);
-  if (!start) return chain;
-  q.push(start);
-  chain.add(start.version_id);
-  // Walk up issuers
-  let cur = start;
-  let hops = 0;
-  while (cur && cur.issuer_version && hops < 4000){
-    const p = byVid.get(cur.issuer_version);
-    if (!p || chain.has(p.version_id)) break;
-    chain.add(p.version_id);
-    cur = p; hops++;
-  }
-  // Walk down to leaves (BFS)
-  const children = new Map();
-  RAW_ROWS.forEach(r => {
-    if (r.issuer_version){
-      if (!children.has(r.issuer_version)) children.set(r.issuer_version, []);
-      children.get(r.issuer_version).push(r);
-    }
-  });
-  const dq = [start];
-  let steps = 0;
-  while (dq.length && steps < 8000){
-    const n = dq.shift();
-    const kids = children.get(n.version_id) || [];
-    for (const k of kids){
-      if (!chain.has(k.version_id)){
-        chain.add(k.version_id);
-        dq.push(k);
-      }
-    }
-    steps++;
-  }
-  return chain;
-}
-
-function toggleDebug(){
-  document.body.classList.toggle('debug-open');
-  const el = document.getElementById('debugLog');
-  if (el && window.__DBG && Array.isArray(__DBG.logs)) {
-    el.textContent = __DBG.logs
-      .map(l => `[${l.time}] ${l.kind}: ${l.msg}${l.meta && l.meta.where ? ` (at ${l.meta.where})` : ''}`)
-      .join('\n');
-  }
-}
-window.toggleDebug = toggleDebug;
-
-function selectByVid(vid){
-  SELECTED.anchorVid = vid || null;
-  SELECTED.chain = vid ? computeChainFromVid(vid) : new Set();
-  renderAll();
-  // visual affordance: flash header button
-  const btn = document.getElementById('btnClearHL'); if(btn){ btn.classList.add('highlight'); setTimeout(()=>btn.classList.remove('highlight'), 450); }
-}
-
-
-const COLORS = {"<=30":"#e11d48","<=60":"#f97316","<=90":"#ca8a04",">90":"#16a34a","no-date":"#6b7280"};
-let RAW_ROWS = [];
-let CARD_DATA_MAIN = {};
-let CARD_DATA_DEP = {};
-
-let __wired = false;
 function init(){
-  if (__wired) return; __wired = true;
-  try{ wireDnD(); } catch(e){ __DBG.push('init.wireDnD', e.stack||e.message||String(e)); }
-  try{ wireTabs(); } catch(e){ __DBG.push('init.wireTabs', e.stack||e.message||String(e)); }
-  try{ wireButtons(); } catch(e){ __DBG.push('init.wireButtons', e.stack||e.message||String(e)); }
-  applyDynamicCols();
-  window.addEventListener('resize', applyDynamicCols, {passive:true});
+  wireDnD();
+  wireTabs();
+  wireButtons();
+  wireFoundations();
+  wireSettings();
+  applyCardHeight(loadCardHeight());
 }
 
-let __colsReq = null;
-function applyDynamicCols(){
-  if (__colsReq) return; // batch until next frame
-  __colsReq = requestAnimationFrame(()=>{
-    __colsReq = null;
-    document.querySelectorAll('[data-dynamic-cols]').forEach(setGridCols);
-  });
-  function setGridCols(el){
-    const width = el.clientWidth || el.parentElement?.clientWidth || window.innerWidth;
-    let cols = Math.max(1, Math.min(4, Math.floor(width / 420)));
-    el.style.setProperty('--cols', cols);
-  }
-}
-
-// v4: helper to return CSS classes for selection
-function selClass(r){
-  if (!SELECTED.anchorVid) return '';
-  return SELECTED.chain.has(r.version_id) ? 'highlight' : 'dimmed';
-}
-
-function showError(msg){ const b=document.getElementById('errorBanner'); if(!b) return; b.textContent=msg; b.style.display='block'; }
-function setStatus(msg){ const s=document.getElementById('status'); if(s) s.textContent=msg||''; }
-function toBucket(n){ if(n===null||n===undefined||n==='') return 'no-date'; n=Number(n); if(n<=30) return '<=30'; if(n<=60) return '<=60'; if(n<=90) return '<=90'; return '>90'; }
-
-/* Uploader */
+// ---- Upload ----
 function wireDnD(){
-  const dz=document.getElementById('dropZone'), fi=document.getElementById('fileInput');
+  const dz = document.getElementById('dropZone');
+  const fi = document.getElementById('fileInput');
   dz.addEventListener('click', ()=> fi.click());
-  fi.addEventListener('change', e=> upload(e.target.files));
-  ['dragenter','dragover'].forEach(evt => dz.addEventListener(evt, e=>{e.preventDefault(); e.stopPropagation(); dz.classList.add('drag');}));
-  ['dragleave','drop'].forEach(evt => dz.addEventListener(evt, e=>{e.preventDefault(); e.stopPropagation(); dz.classList.remove('drag');}));
-  dz.addEventListener('drop', e=>{ const files=e.dataTransfer.files; if(files && files.length) upload(files); });
-
-  function upload(files){
-    const fd=new FormData(); Array.from(files).forEach(f=>fd.append('files',f,f.name));
-    setStatus('Uploading...');
-    fetch('/api/upload',{method:'POST',body:fd})
-      .then(r=>{if(!r.ok) throw new Error('HTTP '+r.status); return r.json();})
-      .then(j=>{ if(!j.ok) throw new Error(j.error||'Upload failed'); setStatus('Loaded '+j.rows+' rows'); refreshRows(); })
-      .catch(e=>showError(e.message));
-  }
+  dz.addEventListener('dragover', e=>{ e.preventDefault(); dz.classList.add('hover'); });
+  dz.addEventListener('dragleave', e=> dz.classList.remove('hover'));
+  dz.addEventListener('drop', async (e)=>{
+    e.preventDefault(); dz.classList.remove('hover');
+    await uploadFiles(e.dataTransfer.files);
+  });
+  fi.addEventListener('change', async (e)=>{
+    await uploadFiles(e.target.files);
+    fi.value = "";
+  });
 }
 
-/* Tabs + filters */
+async function uploadFiles(fileList){
+  const status = document.getElementById('status');
+  const fd = new FormData();
+  let count = 0;
+  for (const f of fileList){
+    if (!/(\.json)$/i.test(f.name)) continue;
+    fd.append('files', f);
+    count++;
+  }
+  if (count===0){ status.textContent = 'No JSON files selected.'; return; }
+  status.textContent = 'Uploading...';
+  const res = await fetch('/api/upload', { method:'POST', body:fd });
+  const j = await res.json().catch(()=> ({}));
+  if (!res.ok || !j.ok){ status.textContent = 'Upload failed: '+(j.error||res.statusText); return; }
+  status.textContent = `Loaded ${j.count} rows.`;
+  await refreshData();
+}
+
+async function refreshData(){
+  const res = await fetch('/api/data');
+  const j = await res.json();
+  ROWS = j.rows || [];
+  render();
+}
+
+// ---- Tabs & Controls ----
 function wireTabs(){
-  document.querySelectorAll('.tab').forEach(el=>el.addEventListener('click', ()=>{
-    document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
-    document.querySelectorAll('.tab-panel').forEach(p=>p.classList.remove('active'));
-    el.classList.add('active');
-    document.getElementById('panel-'+el.dataset.tab).classList.add('active');
-    renderAll();
-  }));
-  const fnd=document.getElementById('fnd'); if(fnd) fnd.innerHTML='<option value="all">All</option>';
-  ['fnd','sla','onlyActive','onlyCA','onlyTrans','groupByFoundation','chainsZoom','chainsMaxH','groupHeatByFoundation','insightsView',
-   'depQuery','depExact','depGroupByFoundation','depZoom','depMaxH']
-    .forEach(id=>{
-      const el=document.getElementById(id); if(!el) return;
-      const evt=(el.tagName==='INPUT' && el.type==='range')?'input':'change';
-      el.addEventListener(evt, renderAll);
+  document.querySelectorAll('.tab').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      document.querySelectorAll('.tab').forEach(b=>b.classList.remove('active'));
+      document.querySelectorAll('.tab-panel').forEach(p=>p.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById('panel-'+btn.dataset.tab).classList.add('active');
+      render();
     });
+  });
 }
 
+function debounce(fn, ms){ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn.apply(null,a), ms); }; }
 function wireButtons(){
-  const clr = document.getElementById('btnClearHL');
-  if (clr) clr.addEventListener('click', clearHighlight);
-  document.addEventListener('keydown', (e)=>{ if(e.key==='Escape') clearHighlight(); });
-
-  const btnClear = document.getElementById('btnClear');
-  if (btnClear) btnClear.addEventListener('click', ()=>{ RAW_ROWS=[]; renderAll(); setStatus('Cleared'); });
-
   const btnCSV = document.getElementById('btnCSV');
-  if (btnCSV) btnCSV.addEventListener('click', ()=> window.open('/api/export/csv','_blank'));
-
+  if (btnCSV) btnCSV.addEventListener('click', ()=> window.open('/api/export/csv', '_blank'));
   const btnJSON = document.getElementById('btnJSON');
-  if (btnJSON) btnJSON.addEventListener('click', ()=> window.open('/api/export/json','_blank'));
+  if (btnJSON) btnJSON.addEventListener('click', ()=> window.open('/api/export/json', '_blank'));
+  const sla = document.getElementById('slaFilter');
+  if (sla) sla.addEventListener('change', ()=> render());
+  const heatSel = document.getElementById('heatView');
+  if (heatSel) heatSel.addEventListener('change', ()=> render());
 
-  const btnRunbook = document.getElementById('btnRunbook');
-  if (btnRunbook) btnRunbook.addEventListener('click', ()=> window.open('/api/runbook','_blank'));
+  const depQ = document.getElementById('depQuery');
+  const depEx = document.getElementById('depExact');
+  if (depQ) depQ.addEventListener('input', debounce(()=> render(), 150));
+  if (depEx) depEx.addEventListener('change', ()=> render());
 
-  const btnDebug = document.getElementById('btnDebug');
-  if (btnDebug) btnDebug.addEventListener('click', window.toggleDebug);
 }
 
-function refreshRows(){ fetch('/api/rows').then(r=>r.json()).then(rows=>{ RAW_ROWS=rows; populateFoundationSelect(); populateDeploymentDatalist(); renderAll(); }).catch(e=>showError(e.message)); }
-function populateFoundationSelect(){
-  const fnd=document.getElementById('fnd'); if(!fnd) return;
-  const cur=fnd.value; const vals=Array.from(new Set(RAW_ROWS.map(r=>r.foundation))).sort();
-  fnd.innerHTML='<option value="all">All</option>'+vals.map(v=>`<option value="${v}">${v}</option>`).join('');
-  if(vals.includes(cur)) fnd.value=cur;
+// ---- Filters ----
+function activeSLA(){ const v=document.getElementById('slaFilter')?.value||'all'; return v; }
+function passesSLA(r){ const f=activeSLA(); if(f==='all') return true; return r.sla===f; }
+function filteredRows(){ return (ROWS||[]).filter(passesSLA); }
+
+// ---- Foundation utilities ----
+function loadMap(){
+  try{ FND_MAP = JSON.parse(localStorage.getItem('foundationMap')||'{}') || {}; }catch{ FND_MAP = {}; }
+  return FND_MAP;
 }
-function collectDeployments(){
-  const set=new Set();
-  RAW_ROWS.forEach(r=>{
-    const list=(r.deployments_list&&Array.isArray(r.deployments_list))?r.deployments_list:String(r.deployments||'').split(/[,;]\s*/);
-    list.forEach(x=>{const v=(x||'').trim(); if(v) set.add(v);});
+function saveMap(){ localStorage.setItem('foundationMap', JSON.stringify(FND_MAP)); }
+function firstPBosh(deployments){
+  for (const d of (deployments||[])){ if (typeof d === 'string' && d.startsWith('p-bosh-')) return d; }
+  return null;
+}
+function suggestName(raw){
+  if (!raw) return '';
+  const tail = raw.split('-').pop();
+  const last6 = tail.slice(-6);
+  return 'bosh-' + last6;
+}
+function resolveFoundationDisplay(row){
+  const raw = firstPBosh(row.deployments);
+  if (raw && FND_MAP[raw]) return FND_MAP[raw];   // exact-match mapping
+  if (raw) return raw;                             // raw fallback
+  return 'unknown';
+}
+
+// ---- Render Router ----
+function render(){
+  const active = document.querySelector('.tab.active')?.dataset.tab || 'table';
+  if (active==='table') renderTable();
+  else if (active==='timeline') renderTimeline();
+  else if (active==='chains') renderChains();
+  else if (active==='insights') renderInsights();
+  else if (active==='deploy') renderDeploy();
+  else if (active==='found') renderFoundations();
+}
+
+// ---- Helpers ----
+function fmtDate(s){ if (!s) return ''; try { const d = new Date(s); return d.toISOString().slice(0,10); } catch { return s; } }
+function clsForSLA(sla){ if (sla === '<=30') return 'bad'; if (sla === '<=60') return 'warn'; if (sla === '<=90') return 'ok'; return ''; }
+
+// ---- TABLE ----
+function renderTable(){
+  const tb = document.querySelector('#tbl tbody');
+  tb.innerHTML = '';
+  const rows = filteredRows().slice().sort((a,b)=>{
+    const ad = a.valid_until ? new Date(a.valid_until).getTime() : Infinity;
+    const bd = b.valid_until ? new Date(b.valid_until).getTime() : Infinity;
+    return ad - bd;
   });
-  return Array.from(set).sort((a,b)=>a.localeCompare(b));
-}
-function populateDeploymentDatalist(){
-  const dl=document.getElementById('depList'); if(!dl) return;
-  dl.innerHTML = collectDeployments().map(n=>`<option value="${n}">`).join('');
-}
-
-function filteredRows(){
-  const fnd=document.getElementById('fnd').value||'all';
-  const sla=document.getElementById('sla').value||'all';
-  const onlyActive=document.getElementById('onlyActive').checked;
-  const onlyCA=document.getElementById('onlyCA').checked;
-  const onlyTrans=document.getElementById('onlyTrans').checked;
-  let data=RAW_ROWS.slice();
-  if(fnd!=='all') data=data.filter(r=>r.foundation===fnd);
-  if(onlyActive) data=data.filter(r=>r.active);
-  if(onlyCA) data=data.filter(r=>r.certificate_authority);
-  if(onlyTrans) data=data.filter(r=>r.transitional);
-  if(sla!=='all') data=data.filter(r=>toBucket(r.days_remaining)===sla);
-  data.sort((a,b)=>(a.days_remaining??9e9)-(b.days_remaining??9e9)||a.foundation.localeCompare(b.foundation)||a.cert_name.localeCompare(b.cert_name));
-  return data;
-}
-
-let __rendering = false, __renderReq = null;
-function renderAll(){
-  if (__renderReq) return; // debounce bursts
-  __renderReq = Promise.resolve().then(()=>{
-    if (__rendering) { __renderReq=null; return; }
-    __rendering = true;
-    try{
-      const data=filteredRows();
-      safeRender('Timeline', ()=>renderTimeline(data));
-      safeRender('Table', ()=>renderTable(data));
-      safeRender('Chains', ()=>renderChainsMain(data));
-      safeRender('Insights', ()=>renderInsights(data));
-      safeRender('Deployments', ()=>renderDeployments());
-      applyDynamicCols();
-    } catch(e){ __DBG.push('renderAll.catch', e && (e.stack||e.message)||String(e)); }
-    finally { __rendering=false; __renderReq=null; }
-  });
-}
-function safeRender(tag, fn){ try{ fn(); } catch(e){ __DBG.push('render.'+tag, e && (e.stack||e.message)||String(e)); const b=document.getElementById('errorBanner'); if(b){ b.style.display='block'; b.innerHTML = `<strong>${tag} render error:</strong> ${(e&&e.message)||e}`; } } }
-
-/* Timeline — List cards */
-function renderTimeline(rows){
-  const empty=document.getElementById('timelineEmpty');
-  const list=document.getElementById('timelineList');
-  if(!rows.length){ empty.style.display='block'; list.innerHTML=''; return; }
-  empty.style.display='none';
-  list.innerHTML = rows.map(r=>{
-    const bucket=toBucket(r.days_remaining), color=COLORS[bucket];
-    const tags=[r.certificate_authority?'CA':null, r.transitional?'T':null, r.active?'ACTIVE':null].filter(Boolean).join(' • ');
-    return `<div class="chip ${selClass(r)}" data-vid="${r.version_id}" style="border-color:${color}" onclick="selectByVid('${r.version_id}')">
-      <div class="line1"><strong>${r.foundation} / ${r.cert_name}</strong><span class="sla" style="background:${color}"></span></div>
-      <div class="line2"><code>${r.version_id_short}</code> ${tags?('• '+tags):''}</div>
-      <div class="line2"><span>${r.days_remaining??'NA'}d</span><span>${r.valid_until||r.valid_until_raw||''}</span></div>
-    </div>`;
-  }).join('');
-}
-
-/* Table */
-function renderTable(rows){
-  const tbody=document.querySelector('#tbl tbody'); if(!tbody) return; tbody.innerHTML='';
-  rows.forEach(r=>{
-    const b=toBucket(r.days_remaining);
-    const tr=document.createElement('tr'); tr.className = selClass(r); tr.innerHTML=`
-      <td>${r.foundation}</td><td>${r.cert_name}</td><td><code style="cursor:pointer;" onclick="selectByVid('${r.version_id}')" title="Highlight chain">${r.version_id_short}</code></td>
+  for (const r of rows){
+    const tr = document.createElement('tr');
+    if (HILITE_NAME && r.name === HILITE_NAME) tr.classList.add('highlight-row');
+    tr.innerHTML = `
+      <td>${r.name||''}</td>
+      <td>${r.is_ca? 'CA':''}</td>
       <td>${r.issuer||''}</td>
-      <td>${r.active?'<span class="badge">ACTIVE</span>':''}</td>
-      <td>${r.certificate_authority?'<span class="badge">CA</span>':''}</td>
-      <td>${r.transitional?'<span class="badge">T</span>':''}</td>
-      <td>${r.deployments||''}</td>
-      <td>${r.valid_until||r.valid_until_raw||''}</td>
-      <td style="text-align:right;">${r.days_remaining??''}</td>
-      <td><span class="badge" style="background:${COLORS[b]}">${b}</span></td>`;
-    tbody.appendChild(tr);
-  });
+      <td>${resolveFoundationDisplay(r)}</td>
+      <td>${r.product_guid||''}</td>
+      <td>${fmtDate(r.valid_until)}</td>
+      <td>${r.days_until ?? ''}</td>
+      <td class="${clsForSLA(r.sla)}">${r.sla||''}</td>
+      <td>${r.depth ?? ''}</td>
+      <td>${r.root_name||''}</td>
+    `;
+    tb.appendChild(tr);
+    tr.addEventListener('click', ()=> setHighlightByRow(r));
+  }
 }
 
-/* Chains (shared renderer used by main + deployments) */
-function renderChainsMain(rows){ CARD_DATA_MAIN={}; renderChainsInto(rows,'chains',CARD_DATA_MAIN); }
-function renderChainsInto(rows, containerId, mapStore){
-  // Hard caps for safety in massive topologies
-  const MAX_CARDS = 250;
-  const MAX_CHIPS_PER_TIER = 1500;
-  if (rows.length > 120000){ __DBG.push('warn','Huge dataset; truncating rows to protect UI'); rows = rows.slice(0,120000); }
-  const el=document.getElementById(containerId); if(!el) return; el.innerHTML='';
-  const byF=(containerId==='chains') ? (document.getElementById('groupByFoundation')?.checked===true) : (document.getElementById('depGroupByFoundation')?.checked===true);
-  const maxH=(containerId==='chains') ? (document.getElementById('chainsMaxH')?.value||420) : (document.getElementById('depMaxH')?.value||420);
-  const zoom=(containerId==='chains') ? (parseInt(document.getElementById('chainsZoom')?.value||'100',10))/100 : (parseInt(document.getElementById('depZoom')?.value||'100',10))/100;
+// ---- TIMELINE ----
+function renderTimeline(){
+  const el = document.getElementById('timeline');
+  el.innerHTML = '';
+  const rows = filteredRows().slice().sort((a,b)=>{
+    const ad = a.valid_until ? new Date(a.valid_until).getTime() : Infinity;
+    const bd = b.valid_until ? new Date(b.valid_until).getTime() : Infinity;
+    return ad - bd;
+  });
+  if (!rows.length){ el.innerHTML = '<div class="muted">Upload JSON to see timeline.</div>'; return; }
+  for (const r of rows){
+    const div = document.createElement('div');
+    div.className = 'item';
+    div.innerHTML = `<span class="${clsForSLA(r.sla)}">[${r.sla||''}]</span> <strong class="tl-name" data-name="${r.name||''}">${r.name||''}</strong> → valid_until ${fmtDate(r.valid_until)} <span class="muted">(root: ${r.root_name||''}, depth ${r.depth ?? ''})</span>`;
+    el.appendChild(div);
+    div.addEventListener('click',(e)=>{ const nm=e.target.closest('.tl-name')?.getAttribute('data-name'); if(nm){ const row=filteredRows().find(x=>x.name===nm); if(row) setHighlightByRow(row);} });
+  }
+}
 
-  const groups={};
-  rows.forEach(r=>{ const key=byF?r.foundation:(r.foundation+'::'+r.cert_name); (groups[key]=groups[key]||[]).push(r); });
-  let keys=Object.keys(groups).sort();
-  if (keys.length > MAX_CARDS) keys = keys.slice(0, MAX_CARDS);
-  if(keys.length===0){ const card=document.createElement('div'); card.className='card'; card.innerHTML='<strong>No chains to display</strong>'; el.appendChild(card); return; }
+// ---- CHAINS ----
+function groupBy(arr, keyfn){ const m = new Map(); for (const x of arr){ const k = keyfn(x); if (!m.has(k)) m.set(k, []); m.get(k).push(x);} return m; }
 
-  let idx=0;
-  keys.forEach(key=>{
-    const [foundation,...rest]=key.split('::'); const cert=byF?'(all certificates)':rest.join('::');
-    const gr=groups[key].slice(); const byVid={}; gr.forEach(x=>byVid[x.version_id]=x);
-
-    const MAX_HOPS = 2000;
-    function computeDepthIter(node){
-      let depth = (node.certificate_authority && !node.issuer_version) ? 1 : 0;
-      let cur = node;
-      let hops = 0;
-      const visited = new Set();
-      while (cur && cur.issuer_version){
-        if (visited.has(cur.version_id)) return 98; // cycle
-        visited.add(cur.version_id);
-        const parent = byVid[cur.issuer_version];
-        if (!parent) return node.certificate_authority ? 2 : 97; // dangling
-        const parentIsRoot = parent.certificate_authority && !parent.issuer_version;
-        depth += 1;
-        if (parentIsRoot) return Math.max(depth, 2);
-        cur = parent;
-        hops += 1;
-        if (hops > MAX_HOPS) return 96; // extremely long
-      }
-      if (node.certificate_authority) return Math.max(depth, 1);
-      return 99; // leaves
-    }
-    function computeTraceIter(node){
-      const stack = [];
-      const visited = new Set();
-      let cur = node;
-      let hops = 0;
-      let cycle = false;
-      while (cur){
-        if (visited.has(cur.version_id)) { cycle = true; break; }
-        visited.add(cur.version_id);
-        stack.push(`${cur.cert_name}(${cur.version_id_short})`);
-        if (!cur.issuer_version) break;
-        const parent = byVid[cur.issuer_version];
-        if (!parent) { stack.push(`?(${(cur.issuer_version || '').slice(0,8)}...)`); break; }
-        cur = parent;
-        hops += 1;
-        if (hops > MAX_HOPS) { stack.push('...<truncated>'); break; }
-      }
-      return { chain: stack.reverse().join(' -> '), cycle };
-    }
-
-    gr.forEach(n=>{
-      n.__parent = n.issuer_version ? byVid[n.issuer_version] : null;
-      const d = computeDepthIter(n);
-      const t = computeTraceIter(n);
-      n.__depth = d;
-      n.__trace = t.chain;
-      n.__cycle = t.cycle || (d === 98);
-    });
-
-    const roots=gr.filter(n=>n.certificate_authority && !n.issuer_version);
-    const transCAs=gr.filter(n=>n.certificate_authority && n.transitional && n.issuer_version);
-    const interCAs=gr.filter(n=>n.certificate_authority && !n.transitional && n.issuer_version);
-    const leaves=gr.filter(n=>!n.certificate_authority);
-    const interLevels={}; interCAs.forEach(n=>{ const d=n.__depth; (interLevels[d]=interLevels[d]||[]).push(n); });
-    const interDepths=Object.keys(interLevels).map(k=>parseInt(k,10)); const maxInterDepth=interDepths.length?Math.max(...interDepths):0;
-    mapStore[idx]={roots,transCAs,interLevels,maxInterDepth,leaves};
-
-    const card=document.createElement('div'); card.className='card';
-    card.innerHTML=`
-      <div style="display:flex; align-items:center; gap:12px; margin-bottom:6px; flex-wrap:wrap;">
-        <div><strong>${foundation} / ${cert}</strong><br><span class="muted">ROOT → TRANSITIONAL → INTERMEDIATE d1..dn → LEAF</span></div>
-        <span style="margin-left:auto;" class="muted">Sort: 
-          <select onchange="${containerId==='chains' ? 'resortCard' : 'resortDepCard'}(${idx}, this.value)">
-            <option value="urgency">Urgency</option>
-            <option value="name">Name</option>
-            <option value="depth">Issuer depth</option>
-          </select>
-        </span>
+function renderChains(){
+  const el = document.getElementById('chains');
+  el.innerHTML = '';
+  const g = groupBy(filteredRows(), r => r.root_name || '(unknown root)');
+  for (const [root, items] of g.entries()){
+    const card = document.createElement('div'); card.className='chain';
+    const roots = items.filter(x=> x.is_ca && (x.depth===0));
+    const inter = items.filter(x=> x.is_ca && (x.depth>0));
+    const leaves = items.filter(x=> !x.is_ca);
+    const mkChip = (r)=> `<span class="chip ${clsForSLA(r.sla)} ${HILITE_NAME && r.name===HILITE_NAME ? 'highlight-chip':''}" data-name="${r.name}" title="${r.name} | until ${fmtDate(r.valid_until)} | depth ${r.depth}">${r.name}</span>`;
+    card.innerHTML = `
+      <h4>${root}</h4>
+      <div class="legend">
+        <span class="item"><span class="sw sla30"></span> ≤30d</span>
+        <span class="item"><span class="sw sla60"></span> ≤60d</span>
+        <span class="item"><span class="sw sla90"></span> ≤90d</span>
+        <span class="item"><span class="sw slaAll"></span> >90d / no-date</span>
       </div>
-      <div class="chain-viewport" style="max-height:${maxH}px;">
-        <div class="chain-canvas" style="transform: scale(${zoom}); transform-origin: top left;"></div>
-      </div>`;
+      <div class="tier"><h5>Root</h5><div class="chips">${roots.map(mkChip).join('')}</div></div>
+      <div class="tier"><h5>Intermediates</h5><div class="chips">${inter.map(mkChip).join('')}</div></div>
+      <div class="tier"><h5>Leaves</h5><div class="chips">${leaves.map(mkChip).join('')}</div></div>
+    `;
     el.appendChild(card);
-    (containerId==='chains' ? resortCard : resortDepCard)(idx,'urgency',mapStore,containerId);
-    idx++;
-  });
-}
-
-function chipHTML(n){
-  const bucket=toBucket(n.days_remaining), color=COLORS[bucket];
-  const badges=[
-    n.certificate_authority?'CA':'',
-    n.transitional?'T':'',
-    n.active?'ACTIVE':'',
-    n.__cycle?'CYCLE':''
-  ].filter(Boolean).map(b=>`<span class="badge">${b}</span>`).join('');
-  const viol=n.__parent && (n.days_remaining??1e9) < (n.__parent.days_remaining??1e9);
-  const tLines = [
-    `${n.cert_name} / ${n.version_id}`,
-    `valid_until: ${n.valid_until || n.valid_until_raw || ''}`,
-    `days_remaining: ${n.days_remaining ?? 'NA'}`,
-    `issuer_chain: ${n.__trace}`
-  ];
-  if (n.__cycle) tLines.push('NOTE: cycle detected in issuer chain');
-  const t = tLines.join('\n');
-  return `<div class="chip ${selClass(n)}${viol?' violation':''}" data-vid="${n.version_id}" title="${t.replace(/"/g,'&quot;')}" onclick="selectByVid('${n.version_id}')">
-    <div class="line1"><strong>${n.version_id_short}</strong><span class="sla" style="background:${color}"></span></div>
-    <div class="line2"><span>${n.days_remaining??'NA'}d</span><span>${n.valid_until || n.valid_until_raw || ''}</span></div>
-    <div class="line2"><span>${n.issuer_version_short?('issuer '+n.issuer_version_short):''} ${n.__depth?('d'+n.__depth):''}</span><div class="badges">${badges}</div></div>
-  </div>`;
-}
-function sortFns(mode){
-  const byUrg=(a,b)=>(a.days_remaining??9e9)-(b.days_remaining??9e9) || (a.version_id_short||'').localeCompare(b.version_id_short||'');
-  const byName=(a,b)=>(a.version_id_short||'').localeCompare(b.version_id_short||'');
-  const byDepth=(a,b)=>(a.__depth||99)-(b.__depth||99) || byUrg(a,b);
-  return mode==='name'?byName:(mode==='depth'?byDepth:byUrg);
-}
-function resortCard(idx, mode, MAP=CARD_DATA_MAIN, containerId='chains'){
-  const data=MAP[idx]; if(!data) return;
-  const {roots,transCAs,interLevels,maxInterDepth,leaves}=data;
-  const sortFn=sortFns(mode);
-  const cardEls=document.querySelectorAll(`#${containerId} .card`); const cardEl=cardEls[idx];
-  const canvas=cardEl.querySelector('.chain-canvas'); canvas.innerHTML='';
-  function tier(title, arr){
-    const div=document.createElement('div'); div.className='tier'; div.innerHTML=`<h5>${title}</h5><div class="chips"></div>`;
-    const grid=div.querySelector('.chips');
-    let list = arr.slice();
-    if (list.length <= 1500) {
-      try { list.sort(sortFn); } catch(e){ __DBG.push('warn','sort failed: '+(e.message||e)); }
-    } else {
-      // Avoid deep recursion in engine sort for very large tiers
-      __DBG.push('info', `skip sort for tier '${title}' size=${list.length}`);
-    }
-    if (list.length > MAX_CHIPS_PER_TIER){
-      __DBG.push('info', `cap tier '${title}' from ${list.length} to ${MAX_CHIPS_PER_TIER}`);
-      list = list.slice(0, MAX_CHIPS_PER_TIER);
-    }
-    // Chunked DOM insertion to avoid long sync tasks
-    const CHUNK = 400;
-    let i = 0;
-    function pump(){
-      const end = Math.min(i+CHUNK, list.length);
-      for (; i<end; i++){
-        const n = list[i];
-        grid.insertAdjacentHTML('beforeend', chipHTML(n));
-      }
-      if (i < list.length){ requestAnimationFrame(pump); }
-    }
-    pump();
-    // Tail note if truncated
-    if (arr.length > list.length){ const note=document.createElement('div'); note.className='muted'; note.textContent = `+${arr.length-list.length} more hidden`; div.appendChild(note); }
-    canvas.appendChild(div);
+    card.addEventListener('click',(e)=>{ const t=e.target; if(t.classList.contains('chip')){ const nm=t.getAttribute('data-name'); const row=filteredRows().find(x=>x.name===nm); if(row) setHighlightByRow(row);} });
   }
-  tier('ROOT CAs',roots); tier('TRANSITIONAL CAs',transCAs);
-  for(let d=1; d<=maxInterDepth; d++) tier('INTERMEDIATE d'+d, (interLevels[d]||[]));
-  tier('LEAVES',leaves);
 }
-window.resortCard=(i,m)=>resortCard(i,m,CARD_DATA_MAIN,'chains');
-function resortDepCard(idx, mode, MAP=CARD_DATA_DEP, containerId='deployChains'){ return resortCard(idx,mode,MAP,containerId); }
-window.resortDepCard=(i,m)=>resortDepCard(i,m,CARD_DATA_DEP,'deployChains');
 
-/* Insights — compact monthly panels */
-function renderInsights(rows){
-  const root=document.getElementById('insights'); if(!root) return; root.innerHTML='';
-  const group=document.getElementById('groupHeatByFoundation')?.checked===true;
-  const events=rows.map(r=>({d:(r.valid_until||r.valid_until_raw||'').slice(0,10), f:r.foundation, c:r.cert_name, v:r.version_id_short, vFull:r.version_id})).filter(e=>e.d);
-  if(!events.length){ const c=document.createElement('div'); c.className='card'; c.innerHTML='<div class="muted">No valid expiration dates in scope.</div>'; root.appendChild(c); return; }
-  const byF={}; events.forEach(e=> (byF[e.f]=byF[e.f]||[]).push(e));
-  const sets = group ? Object.entries(byF) : [['All Foundations', events]];
-  sets.forEach(([title,evs])=>{
-    // v4: dim month cards if they don’t include any selected versions (when selection active)
-    let hasSelected = true;
-    if (SELECTED.anchorVid){
-      const vids = new Set(evs.map(e=>e.vFull || e.v || ''));
-      hasSelected = [...SELECTED.chain].some(v=>vids.has(v));
+// ---- INSIGHTS ----
+function renderInsights(){
+  const grid = document.getElementById('insights'); if(!grid) return;
+  grid.innerHTML = '';
+  const rows = filteredRows();
+  if (!rows.length){ grid.innerHTML = '<div class="muted">No data in current filter.</div>'; return; }
+  loadMap();
+  const sel = document.getElementById('heatView');
+  const mode = sel ? sel.value : 'monthly';
+  if (mode === 'calendar') renderInsightsCalendarStrip(grid, rows);
+  else renderInsightsMonthly(grid, rows);
+}
+
+// Monthly cards
+function renderInsightsMonthly(grid, rows){
+  const byMonth = new Map();
+  for (const r of rows){
+    if (!r.valid_until) continue;
+    const d = new Date(r.valid_until); if (isNaN(d)) continue;
+    const k = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0');
+    byMonth.set(k, (byMonth.get(k)||0) + 1);
+  }
+  const months = [...byMonth.keys()].sort();
+  if (!months.length){ grid.innerHTML = '<div class="muted">No expiring certificates with valid dates.</div>'; return; }
+  for (const m of months){
+    const card = document.createElement('div'); card.className='cal-month';
+    card.innerHTML = `<h4>${m}</h4><div class="muted">expiring: <strong>${byMonth.get(m)}</strong></div>`;
+    grid.appendChild(card);
+  }
+}
+
+// Calendar strip (Month + Foundation), hide empty foundations
+function renderInsightsCalendarStrip(grid, rows){
+  const monthKey = (d) => d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0');
+  const slaClass = (sla) => (sla === '<=30') ? 'bad' : (sla === '<=60') ? 'warn' : (sla === '<=90') ? 'ok' : 'dim';
+
+  // idx[month][foundation] = array of cert rows
+  const idx = new Map();
+  for (const r of rows){
+    const vu = r.valid_until ? new Date(r.valid_until) : null;
+    const m = (vu && !isNaN(vu)) ? monthKey(vu) : 'no-date';
+    const f = resolveFoundationDisplay(r);
+    if (!idx.has(m)) idx.set(m, new Map());
+    const fm = idx.get(m);
+    if (!fm.has(f)) fm.set(f, []);
+    fm.get(f).push(r);
+  }
+
+  const months = [...idx.keys()].sort();
+  if (!months.length){ grid.innerHTML = '<div class="muted">No expiring certificates with valid dates.</div>'; return; }
+
+  for (const mon of months){
+    const card = document.createElement('div'); card.className='cal-month';
+    let inner = `<h4>${mon}</h4>`;
+    const fm = idx.get(mon);
+    const foundations = [...fm.keys()].sort();
+
+    for (const fnd of foundations){
+      const list = fm.get(fnd);
+      if (!list.length) continue; // B: hide empty foundations
+      const sq = list.map(r => {
+        const title = `${r.name} — until ${r.valid_until ? (new Date(r.valid_until)).toISOString().slice(0,10) : 'n/a'} — ${r.sla || 'no-date'}`;
+        const hi = (HILITE_NAME && r.name === HILITE_NAME) ? ' highlight-square' : '';
+        return `<div class="sq ${slaClass(r.sla)}${hi}" data-name="${r.name}" title="${title}"></div>`;
+      }).join('');
+
+      inner += `
+        <div class="cal-found">
+          <div class="label" title="${fnd}">${fnd}</div>
+          <div class="cal-grid">${sq}</div>
+        </div>`;
     }
 
-    const m=new Map(); evs.forEach(e=>{const wk=startOfWeekStr(e.d); m.set(wk,(m.get(wk)||0)+1);});
-    const min=[...m.keys()].sort()[0]; const months=buildMonthList(min);
-    const wrap=document.createElement('div'); wrap.className='card'; wrap.innerHTML=`<h4 style="margin:0 0 6px 0;">Rotation Splash — ${title}</h4><div class="grid"></div>`;
-    const grid=wrap.querySelector('.grid');
-    months.forEach(mon=>{
-      const weeks=listWeeks(mon); const counts=weeks.map(w=>m.get(w)||0); const max=Math.max(1,...counts);
-      const cell=12,gap=2,padL=26,padT=18; const cols=weeks.length, vbW=padL+cols*(cell+gap)+8, vbH=padT+7*(cell+gap)+12;
-      let svg=`<svg viewBox="0 0 ${vbW} ${vbH}" width="100%" height="${vbH}" xmlns="http://www.w3.org/2000/svg">`;
-      const dnames=['M','T','W','T','F','S','S'];
-      for(let r=0;r<7;r++) svg+=`<text x="6" y="${padT + r*(cell+gap) + cell - 2}" font-size="9" fill="#94a3b8">${dnames[r]}</text>`;
-      weeks.forEach((wk,c)=>{ for(let r=0;r<7;r++){ const k=fmt(addDays(parseDate(wk),r)); const val=m.get(startOfWeekStr(k))||0; const t=val/max; const a=0.25+0.75*t; const x=padL+c*(cell+gap), y=padT+r*(cell+gap); svg+=`<rect x="${x}" y="${y}" width="${cell}" height="${cell}" fill="rgba(22,163,74,${a})"><title>${k}\n${val} expiration(s)</title></rect>`; } });
-      svg+='</svg>';
-      const mini=document.createElement('div'); mini.className='chip'; mini.innerHTML=`<strong>${mon}</strong>${svg}`; if(!hasSelected){ mini.classList.add('dimmed'); } grid.appendChild(mini);
+    card.innerHTML = inner;
+    card.addEventListener('click', (e) => {
+      const t = e.target;
+      if (!t.classList.contains('sq')) return;
+      const name = t.getAttribute('data-name');
+      const row = rows.find(x => x.name === name);
+      if (row) setHighlightByRow(row);
     });
-    root.appendChild(wrap);
-  });
-
-  function parseDate(s){ return new Date(s+'T00:00:00'); }
-function fmt(d){ return d.toISOString().slice(0,10); }
-function addDays(d,n){ const x=new Date(d.getTime()); x.setDate(x.getDate()+n); return x; }
-function startOfWeekStr(s){ const d=parseDate(s); const day=d.getDay(); const diff=(day+6)%7; d.setDate(d.getDate()-diff); return fmt(d); }
-function startOfWeekDate(d){ const x=new Date(d.getTime()); const day=x.getDay(); const diff=(day+6)%7; x.setDate(x.getDate()-diff); return x; }
-function buildMonthList(start){
-  const arr=[]; if(!start) return arr; const d=parseDate(start);
-  if(Number.isNaN(d.getTime())) return arr; const now=new Date(); now.setMonth(now.getMonth()+12);
-  for(let x=new Date(d.getFullYear(), d.getMonth(), 1); x<=now; x=new Date(x.getFullYear(), x.getMonth()+1, 1)){
-    arr.push(x.toLocaleString(undefined,{month:'long',year:'numeric'}));
+    grid.appendChild(card);
   }
-  return arr;
-}
-function listWeeks(monLabel){
-  const parts = monLabel.split(' ');
-  if (parts.length<2) return [];
-  const m = parts[0], y = parseInt(parts[1],10);
-  if(!y || Number.isNaN(y)) return [];
-  const firstOfMonth = new Date(`${m} 1, ${y}`);
-  if(Number.isNaN(firstOfMonth.getTime())) return [];
-  const lastOfMonth = new Date(firstOfMonth.getFullYear(), firstOfMonth.getMonth()+1, 0);
-  // find Monday on or before firstOfMonth
-  let cur = startOfWeekDate(firstOfMonth);
-  const out = [];
-  // iterate Mondays until we pass lastOfMonth + 6 days (to cover final week)
-  const end = addDays(lastOfMonth, 6);
-  let guard = 0;
-  while (cur <= end && guard < 12){
-    out.push(fmt(cur));
-    cur = addDays(cur, 7);
-    guard++;
-  }
-  return out;
-}
 }
 
-/* Deployments */
-function renderDeployments(){
-  const cont=document.getElementById('deployChains'); if(!cont) return;
-  const help=document.getElementById('deployHelp'); cont.innerHTML=''; if(help) help.style.display='none';
-  const q=(document.getElementById('depQuery')?.value || '').trim(); const exact=document.getElementById('depExact')?.checked===true;
-  // Use globally filtered set as the base
+// ---- DEPLOYMENTS ----
+function renderDeploy(){
+  const cont = document.getElementById('deployChains'); if(!cont) return;
+  const help = document.getElementById('deployHelp'); cont.innerHTML=''; if(help) help.style.display='none';
+  const q = (document.getElementById('depQuery')?.value || '').trim();
+  const exact = document.getElementById('depExact')?.checked === true;
   const base = filteredRows();
+  // populate datalist suggestions
+  const dl = document.getElementById('depList');
+  if (dl && !dl.childElementCount) {
+    const set = new Set();
+    base.forEach(r => (r.deployments||[]).forEach(d => { if(d) set.add(d); }));
+    const opts = [...set].slice(0,300).sort().map(d => `<option value="${d}"></option>`).join('');
+    dl.innerHTML = opts;
+  }
   if(!q){
-    const freq=new Map();
-    base.forEach(r=>{ const list=(r.deployments_list&&Array.isArray(r.deployments_list))?r.deployments_list:String(r.deployments||'').split(/[,;]\s*/); list.forEach(x=>{const v=(x||'').trim(); if(v) freq.set(v,(freq.get(v)||0)+1);}); });
-    const top=[...freq.entries()].sort((a,b)=>b[1]-a[1]).slice(0,30);
+    const freq = new Map();
+    base.forEach(r=>{ (r.deployments||[]).forEach(d=>{ const v=(d||'').trim(); if(v) freq.set(v,(freq.get(v)||0)+1); }); });
+    const top = [...freq.entries()].sort((a,b)=>b[1]-a[1]).slice(0,30);
     const rows = top.map(([n,c])=>`<tr><td>${n}</td><td style="text-align:right;">${c}</td></tr>`).join('') || '<tr><td colspan="2" class="muted">No deployments detected in current filter.</td></tr>';
     if(help){ help.style.display='block'; help.innerHTML = `<strong>Type a deployment_name to see correlated chains.</strong>
-      <div class="muted" style="margin:6px 0 10px 0;">Scope respects global filters (foundation/SLA/CA/Transitional/Active).</div>
+      <div class="muted" style="margin:6px 0 10px 0;">Scope respects SLA filter.</div>
       <table style="width:100%; border-collapse:collapse;">
         <thead><tr><th>Top deployment_name</th><th style="text-align:right;">Refs</th></tr></thead><tbody>${rows}</tbody></table>`; }
     return;
   }
-  const qlc=q.toLowerCase();
-  const matched = base.filter(r=>{
-    const list=(r.deployments_list&&Array.isArray(r.deployments_list))?r.deployments_list:String(r.deployments||'').split(/[,;]\s*/);
-    return list.some(x=>{ const v=(x||'').trim(); if(!v) return false; return exact? v===q : v.toLowerCase().includes(qlc); });
-  });
+  const qlc = q.toLowerCase();
+  const matched = base.filter(r=> (r.deployments||[]).some(x=>{
+    const v=(x||'').trim();
+    return v && (exact ? v===q : v.toLowerCase().includes(qlc));
+  }));
   if(!matched.length){ const card=document.createElement('div'); card.className='card'; card.innerHTML=`<div class="muted">No matches for <code>${q}</code> in current filter.</div>`; cont.appendChild(card); return; }
-  CARD_DATA_DEP={}; renderChainsInto(matched,'deployChains',CARD_DATA_DEP);
+  const byRoot = groupBy(matched, r => r.root_name || '(unknown root)');
+  for (const [root, items] of byRoot.entries()){
+    const card = document.createElement('div'); card.className = 'chain';
+    const roots = items.filter(x=> x.is_ca && (x.depth===0));
+    const inter = items.filter(x=> x.is_ca && (x.depth>0));
+    const leaves = items.filter(x=> !x.is_ca);
+    const mkChip = (r)=> `<span class="chip ${clsForSLA(r.sla)} ${HILITE_NAME && r.name===HILITE_NAME ? 'highlight-chip':''}" data-name="${r.name}" title="${r.name} | until ${fmtDate(r.valid_until)} | depth ${r.depth}">${r.name}</span>`;
+    card.innerHTML = `
+      <h4>${root}</h4>
+      <div class="legend">
+        <span class="item"><span class="sw sla30"></span> ≤30d</span>
+        <span class="item"><span class="sw sla60"></span> ≤60d</span>
+        <span class="item"><span class="sw sla90"></span> ≤90d</span>
+        <span class="item"><span class="sw slaAll"></span> >90d / no-date</span>
+      </div>
+      <div class="tier"><h5>Root</h5><div class="chips">${roots.map(mkChip).join('')}</div></div>
+      <div class="tier"><h5>Intermediates</h5><div class="chips">${inter.map(mkChip).join('')}</div></div>
+      <div class="tier"><h5>Leaves</h5><div class="chips">${leaves.map(mkChip).join('')}</div></div>
+    `;
+    cont.appendChild(card);
+    card.addEventListener('click',(e)=>{ const t=e.target; if(t.classList.contains('chip')){ const nm=t.getAttribute('data-name'); const row=filteredRows().find(x=>x.name===nm); if(row) setHighlightByRow(row);} });
+  }
+}
+
+// ---- Foundations Tab ----
+function uniquePBoshIds(rows){ const s = new Set(); for (const r of rows){ const raw = firstPBosh(r.deployments); if (raw) s.add(raw);} return [...s]; }
+
+function renderFoundations(){
+  const tb = document.querySelector('#mapTbl tbody'); if(!tb) return;
+  loadMap();
+  tb.innerHTML = '';
+  const ids = uniquePBoshIds(filteredRows());
+  const allRows = new Set([...ids, ...Object.keys(FND_MAP||{})]);
+  for (const raw of allRows){
+    const tr = document.createElement('tr');
+    const val = FND_MAP[raw] || '';
+    tr.innerHTML = `<td><code title="${raw}">${raw||''}</code></td>
+      <td><input type="text" class="map-friendly" data-raw="${raw}" value="${val}" placeholder="${raw?suggestName(raw):''}"></td>
+      <td style="text-align:right;"><button class="btn btn-del" data-raw="${raw}">Del</button></td>`;
+    tb.appendChild(tr);
+  }
+  tb.addEventListener('input', (e)=>{ const inp = e.target.closest('.map-friendly'); if(!inp) return;
+    const raw = inp.getAttribute('data-raw'); FND_MAP[raw] = inp.value.trim(); saveMap(); });
+  tb.addEventListener('click', (e)=>{ const del = e.target.closest('.btn-del'); if(!del) return;
+    const raw = del.getAttribute('data-raw'); delete FND_MAP[raw]; saveMap(); renderFoundations(); });
+  const stats = document.getElementById('mapStats');
+  if (stats){
+    const counts = {}; for (const r of filteredRows()){ const raw = firstPBosh(r.deployments)||'unknown'; counts[raw]=(counts[raw]||0)+1; }
+    const lines = Object.entries(counts).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`${FND_MAP[k]||k}: ${v}`).join(' • ');
+    stats.textContent = 'Affected certs: ' + lines;
+  }
+}
+
+function wireFoundations(){
+  const btnS = document.getElementById('mapSuggest');
+  const btnA = document.getElementById('mapAdd');
+  const btnAp= document.getElementById('mapApply');
+  const btnE = document.getElementById('mapExport');
+  const btnI = document.getElementById('mapImport');
+  const fi   = document.getElementById('mapImportFile');
+  if (btnS) btnS.addEventListener('click', ()=>{
+    const ids = uniquePBoshIds(filteredRows());
+    for (const raw of ids){ if (!FND_MAP[raw]) FND_MAP[raw] = suggestName(raw); }
+    saveMap(); renderFoundations(); render();
+  });
+  if (btnA) btnA.addEventListener('click', ()=>{ FND_MAP['p-bosh-'] = FND_MAP['p-bosh-'] || ''; saveMap(); renderFoundations(); });
+  if (btnAp) btnAp.addEventListener('click', ()=>{ saveMap(); render(); });
+  if (btnE) btnE.addEventListener('click', ()=>{
+    const blob = new Blob([JSON.stringify(FND_MAP,null,2)], {type:'application/json'});
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'mapping.json'; a.click();
+  });
+  if (btnI) btnI.addEventListener('click', ()=> fi && fi.click());
+  if (fi) fi.addEventListener('change', async (e)=>{
+    const f = e.target.files[0]; if (!f) return;
+    const text = await f.text();
+    try{ FND_MAP = JSON.parse(text)||{}; saveMap(); renderFoundations(); render(); }catch{ alert('Invalid JSON'); }
+    fi.value='';
+  });
+}
+
+// ---- Cross-tab highlight ----
+function setHighlightByRow(r){
+  if (!r) return;
+  HILITE_NAME = r.name||null;
+  render();
+  // Table
+  const rows = document.querySelectorAll('#tbl tbody tr');
+  for (const tr of rows){
+    if (tr.textContent.includes(r.name||'')){ tr.scrollIntoView({behavior:'smooth', block:'center'}); break; }
+  }
+  // Chains chip
+  const chips = document.querySelectorAll('.chip');
+  for (const c of chips){
+    if ((c.getAttribute('title')||'').startsWith(r.name||'')){ c.classList.add('highlight-chip'); c.scrollIntoView({behavior:'smooth', block:'center'}); break; }
+  }
+  // Insights square
+  const squares = document.querySelectorAll('.sq[title]');
+  for (const s of squares){
+    if ((s.getAttribute('title')||'').startsWith(r.name||'')){ s.classList.add('highlight-square'); s.scrollIntoView({behavior:'smooth', block:'center'}); break; }
+  }
+}
+document.addEventListener('keydown', (e)=>{ if(e.key==='Escape'){ HILITE_NAME=null; render(); }});
+
+
+// ---- Settings (Card Height) ----
+function loadCardHeight(){
+  try{ const v = localStorage.getItem('cardMaxH'); return v ? parseInt(v,10) : 800; }catch{ return 800; }
+}
+function applyCardHeight(px){
+  const v = Math.max(200, Math.min(2000, parseInt(px,10)||800));
+  document.documentElement.style.setProperty('--card-max-h', v + 'px');
+  const input = document.getElementById('cardHeightPx'); if (input) input.value = v;
+  try{ localStorage.setItem('cardMaxH', String(v)); }catch{}
+}
+function wireSettings(){
+  const input = document.getElementById('cardHeightPx');
+  const btn = document.getElementById('cardApply');
+  if (input) input.value = loadCardHeight();
+  if (btn) btn.addEventListener('click', ()=> applyCardHeight(document.getElementById('cardHeightPx').value));
 }
